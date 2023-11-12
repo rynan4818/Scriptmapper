@@ -3,21 +3,27 @@ from random import random
 
 
 def raw_process(self, b):
+    if self.v3:
+        nameKey = 'n'
+        timeKey = 'b'
+    else:
+        nameKey = '_name'
+        timeKey = '_time'
     # blanck check
-    if b['_name'] == '':
+    if b[nameKey] == '':
         self.logger.log(
-            f'{b["_time"]} 空白のブックマークを検出。デフォルト値として stop を代入します。')
-        b['_name'] = 'stop'
+            f'{b[timeKey]} 空白のブックマークを検出。デフォルト値として stop を代入します。')
+        b[nameKey] = 'stop'
     # -> check
-    if '->' in b['_name']:
+    if '->' in b[nameKey]:
         self.logger.log(
             f'補助コマンド「->」を確認。「stop,」を代入します。')
-        b['_name'] = b['_name'].replace('->','stop,')
+        b[nameKey] = b[nameKey].replace('->','stop,')
     # start check
-    if b['_time'] <= 1:
+    if b[timeKey] <= 1:
         self.logger.log('スタートから 1 グリッド以内のブックマークはスタート地点にセットします')
-        b['_time'] = 0
-    self.raw_b.append(Bookmark(b['_time'], b['_name'], 0))
+        b[timeKey] = 0
+    self.raw_b.append(Bookmark(b[timeKey], b[nameKey], 0))
 
 
 def fill_process(self, i):

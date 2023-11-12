@@ -24,6 +24,7 @@ class ScriptMapper:
         self.path_obj = None
         self.logger = None
         self.manual = {}
+        self.v3 = True
         # env
         self.bpm = 0
         self.bpmchanges = []
@@ -77,15 +78,23 @@ class ScriptMapper:
         f = open(self.file_path, 'rb')
         j = json.load(f)
         if '_customData' in j:
+            self.v3 = False
+        if self.v3:
+            timeKey = 'b'
+            bpmKey = 'm'
+            if 'bpmEvents' not in j:
+                return
+            bpmChanges = j['bpmEvents']
+        else:
+            timeKey = '_time'
+            bpmKey = '_BPM'
             if '_BPMChanges' not in j['_customData']:
                 return
-            else:
-                bpmChanges = j['_customData']['_BPMChanges']
-                for b in bpmChanges:
-                    self.bpmchanges.append({
-                        'time': b['_time'] * 60 / bpm,
-                        'bpm': b['_BPM'],
-                        'perbar': b['_beatsPerBar']})
+            bpmChanges = j['_customData']['_BPMChanges']
+        for b in bpmChanges:
+            self.bpmchanges.append({
+                'time': b[timeKey] * 60 / bpm,
+                'bpm': b[bpmKey]})
 
     def make_manual_commands(self):
         path_dir = self.path_obj.parent
@@ -101,20 +110,31 @@ class ScriptMapper:
         dummyend_grid = 100
         f = open(self.path_obj, 'r')
         j = json.load(f)
-        notes = j['_notes']
-        if len(notes) > 0:
-            dummyend_grid = notes[-1]['_time']+100
-        bookmarks = []
-        if '_customData' in j.keys():
-            bookmarks = j['_customData']['_bookmarks']
+        if self.v3:
+            notesKey = 'colorNotes'
+            customDataKey = 'customData'
+            bookmarkKey = 'bookmarks'
+            timeKey = 'b'
+            nameKey = 'n'
         else:
-            bookmarks = j['_bookmarks']
+            notesKey = '_notes'
+            customDataKey = '_customData'
+            bookmarkKey = '_bookmarks'
+            timeKey = '_time'
+            nameKey = '_name'
+        notes = j[notesKey]
+        if len(notes) > 0:
+            dummyend_grid = notes[-1][timeKey]+100
+        bookmarks = []
+        if customDataKey in j.keys():
+            bookmarks = j[customDataKey][bookmarkKey]
+        else:
+            bookmarks = j[bookmarkKey]
         if len(bookmarks) == 0:
             self.logger.log('この譜面にはブックマークが含まれていません。プログラムを終了します。')
             exit()
-        else:
-            dummyend_grid = max(dummyend_grid, bookmarks[-1]['_time'] + 100)
-        bookmarks.append({'_time': dummyend_grid, '_name': 'dummyend'})
+        dummyend_grid = max(dummyend_grid, bookmarks[-1][timeKey] + 100)
+        bookmarks.append({timeKey: dummyend_grid, nameKey: 'dummyend'})
         self.dummyend_grid = dummyend_grid
         self.logger.log(f'ダミーエンドをグリッド {dummyend_grid} に設定。')
         for b in bookmarks:

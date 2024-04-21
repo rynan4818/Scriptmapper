@@ -76,16 +76,41 @@ class ScriptMapper:
         self.logger.log(f'bpmを計測 {self.bpm} \n')
         f = open(self.file_path, 'rb')
         j = json.load(f)
+        if '_events' in j:
+            bpmChanges = j['_events'] # V2.5
+            for b in bpmChanges:
+                if b['_type'] == 100:
+                    if self.bpmchanges == []:
+                        self.logger.log('V2.5のBPM Eventsを検出')
+                    self.logger.log(f'grid : {b['_time']:6.2f} (BPM : {b['_floatValue']})')
+                    self.bpmchanges.append({
+                        'grid': b['_time'],
+                        'bpm': b['_floatValue']})
+        if self.bpmchanges != []:
+            self.logger.log('')
+            return
         if '_customData' in j:
             if '_BPMChanges' not in j['_customData']:
                 return
             else:
+                self.logger.log('CustomDataのBPMChangesを検出')
                 bpmChanges = j['_customData']['_BPMChanges']
                 for b in bpmChanges:
+                    self.logger.log(f'time : {b['_time'] * 60 / bpm:6.2f} (BPM : {b['_BPM']})')
                     self.bpmchanges.append({
                         'time': b['_time'] * 60 / bpm,
                         'bpm': b['_BPM'],
                         'perbar': b['_beatsPerBar']})
+                self.logger.log('')
+        elif 'bpmEvents' in j:
+            self.logger.log('V3.0のBPM Eventsを検出')
+            bpmChanges = j['bpmEvents'] # V3
+            for b in bpmChanges:
+                self.logger.log(f'grid : {b['b']:6.2f} (BPM : {b['m']})')
+                self.bpmchanges.append({
+                    'grid': b['b'],
+                    'bpm': b['m']})
+            self.logger.log('')
 
     def make_manual_commands(self):
         path_dir = self.path_obj.parent
@@ -163,8 +188,30 @@ class ScriptMapper:
         for i in range(size-1):
             start = command_b[i].grid
             end = command_b[i+1].grid
-            dur_grid = end - start
-            command_b[i].duration = dur_grid*60/self.bpm
+            current_bpm = self.bpm
+            bpmchange_grid = 0
+            virtual_time = 0
+            start_time = 0
+            end_time = 0
+            start_check = True
+            v1_format = False
+            for change in self.bpmchanges:
+                if 'grid' not in change:
+                    dur_grid = end - start
+                    command_b[i].duration = dur_grid*60/self.bpm
+                    v1_format = True
+                    break
+                if start_check and change['grid'] >= start:
+                    start_time = virtual_time + (start - bpmchange_grid) * 60 / current_bpm
+                    start_check = False
+                if change['grid'] >= end:
+                    break
+                virtual_time += (change['grid'] - bpmchange_grid) * 60 / current_bpm
+                current_bpm = change['bpm']
+                bpmchange_grid = change['grid']
+            if not v1_format:
+                end_time = virtual_time + (end - bpmchange_grid) * 60 / current_bpm
+                command_b[i].duration = end_time - start_time
 
     def show_bookmarks(self) -> None:
         self.logger.log('\nfill,copyの処理を完了しました。最終的なブックマークは以下になります。')
@@ -178,6 +225,8 @@ class ScriptMapper:
             span_end = 0
             current_bpm = self.bpm
             for change in self.bpmchanges:
+                if 'time' not in change:  # V2.5以降
+                    break
                 span = change['time'] - span_end
                 span_end = change['time']
                 if span > virtual_time:

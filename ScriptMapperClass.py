@@ -82,7 +82,7 @@ class ScriptMapper:
                 if b['_type'] == 100:
                     if self.bpmchanges == []:
                         self.logger.log('V2.5のBPM Eventsを検出')
-                    self.logger.log(f'grid : {b['_time']:6.2f} (BPM : {b['_floatValue']})')
+                    self.logger.log(f'grid : {b["_time"]:6.2f} (BPM : {b["_floatValue"]})')
                     self.bpmchanges.append({
                         'grid': b['_time'],
                         'bpm': b['_floatValue']})
@@ -96,7 +96,7 @@ class ScriptMapper:
                 self.logger.log('CustomDataのBPMChangesを検出')
                 bpmChanges = j['_customData']['_BPMChanges']
                 for b in bpmChanges:
-                    self.logger.log(f'time : {b['_time'] * 60 / bpm:6.2f} (BPM : {b['_BPM']})')
+                    self.logger.log(f'time : {b["_time"] * 60 / bpm:6.2f} (BPM : {b["_BPM"]})')
                     self.bpmchanges.append({
                         'time': b['_time'] * 60 / bpm,
                         'bpm': b['_BPM'],
@@ -106,7 +106,7 @@ class ScriptMapper:
             self.logger.log('V3.0のBPM Eventsを検出')
             bpmChanges = j['bpmEvents'] # V3
             for b in bpmChanges:
-                self.logger.log(f'grid : {b['b']:6.2f} (BPM : {b['m']})')
+                self.logger.log(f'grid : {b["b"]:6.2f} (BPM : {b["m"]})')
                 self.bpmchanges.append({
                     'grid': b['b'],
                     'bpm': b['m']})

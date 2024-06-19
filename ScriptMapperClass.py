@@ -209,6 +209,8 @@ class ScriptMapper:
                 virtual_time += (change['grid'] - bpmchange_grid) * 60 / current_bpm
                 current_bpm = change['bpm']
                 bpmchange_grid = change['grid']
+            if start_check:
+                start_time = virtual_time + (start - bpmchange_grid) * 60 / current_bpm
             if not v1_format:
                 end_time = virtual_time + (end - bpmchange_grid) * 60 / current_bpm
                 command_b[i].duration = end_time - start_time

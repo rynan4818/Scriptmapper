@@ -366,9 +366,22 @@ class ScriptMapper:
         template['ActiveInPauseMenu'] = True
         template['TurnToHeadUseCameraSetting'] = False
         template['Movements'] = []
-        for line in self.lines:
-            if line.duration < 0.009:
+        duration_error = 0
+        total_duration_error = 0
+        total_duration_error_count = 0
+        rounding_error = 0.0
+        lines_count = len(self.lines)
+        for i in range(lines_count):
+            line = self.lines[i]
+            if i < lines_count - 1 and line.duration < 0.01:
+                duration_error += line.duration
+                total_duration_error += line.duration
+                total_duration_error_count += 1
                 continue
+            line.duration += duration_error
+            duration_error = 0
+            if line.duration < 0.01:
+                line.duration = 0.01
             movement = {}
             movement['StartPos'] = {'x': line.start.pos.x,
                                     'y': line.start.pos.y,
@@ -392,7 +405,12 @@ class ScriptMapper:
                                          'z': line.endHeadOffset.z}
             movement['TurnToHead'] = line.turnToHead
             movement['TurnToHeadHorizontal'] = line.turnToHeadHorizontal
-            movement['Duration'] = line.duration
+
+            effective_duration = line.duration + rounding_error
+            rounded_duration = round(effective_duration, 3)
+            rounding_error = effective_duration - rounded_duration
+            movement['Duration'] = rounded_duration
+
             movement['Delay'] = 0
             movement['EaseTransition'] = False
             movement['VisibleObject'] = {}
@@ -400,6 +418,8 @@ class ScriptMapper:
                 movement['VisibleObject'][key] = value
             template['Movements'].append(movement)
         self.output = template
+        if total_duration_error_count > 0:
+            self.logger.log(f'\ndurationが0.01秒未満のmovementが{total_duration_error_count} 回ありました。合計の補正時間は{total_duration_error:.20f} 秒です')
         self.logger.log('\nソフト内部でのjsonデータの作成に成功しました。\n')
 
     def create_file(self):

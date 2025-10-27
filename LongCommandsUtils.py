@@ -51,6 +51,8 @@ def rotate(self, text, dur):
     spans = []
     while dur > 0:
         min_span = min(span, dur)
+        if dur - min_span < 0.01:
+            min_span = dur
         spans.append(min_span)
         dur -= min_span
     span_size = len(spans)
@@ -136,6 +138,8 @@ def rot(self, dur, text, line):
     spans = []
     while dur > 0:
         min_span = min(span, dur)
+        if dur - min_span < 0.01:
+            min_span = dur
         spans.append(min_span)
         dur -= min_span
     span_size = len(spans)
@@ -223,6 +227,8 @@ def vib(self, dur, text, line):
     span = max(1/30, param*60/bpm)
     while dur > 0:
         min_span = min(span, dur)
+        if dur - min_span < 0.01:
+            min_span = dur
         spans.append(min_span)
         dur -= min_span
     spans = [sum(spans)/len(spans)]*len(spans)

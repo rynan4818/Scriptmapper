@@ -275,6 +275,8 @@ def ease(self, dur, text : str, line):
     init_dur = dur
     while dur > 0:
         min_span = min(span, dur)
+        if dur - min_span < 0.01:
+            min_span = dur
         spans.append(min_span)
         dur -= min_span
     span_size = len(spans)

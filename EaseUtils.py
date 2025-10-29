@@ -296,6 +296,8 @@ def ease(self, dur, text : str, line):
         new_line.visibleDict = deepcopy(line.visibleDict)
         t = sum(spans[:(i+1)])/init_dur
         if easefunc != Drift:
+            if t > 1:
+                t = 1
             rate = easefunc(t)
         else:
             rate = Drift(t,dx,dy)

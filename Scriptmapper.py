@@ -45,6 +45,9 @@ def mapping(file_path):
     # vibの処理
     mapper.vib_calc()
 
+    # rvibの処理
+    mapper.rvib_calc()
+
     # レンダリング
     mapper.render_json()
 

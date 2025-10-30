@@ -1,5 +1,5 @@
 from copy import deepcopy
-from math import cos, pi, sin, sqrt
+from math import cos, pi, sin, sqrt, ceil
 
 from BasicElements import Pos, Rot, Line, Transform
 
@@ -228,42 +228,74 @@ def Drift(t, x=6, y=6):
         return 3*(1-ok)*ok*ok*hy + ok*ok*ok*y
 
 
+def calculate_adaptive_multiplier(easefunc, dur, dx, dy, logger):
+    if easefunc is None or dur <= 0:
+        return 1.0
+    sim_step = 1/30 
+    num_steps = ceil(dur / sim_step)
+    if num_steps == 0:
+        num_steps = 1
+    linear_delta_rate = 1.0 / num_steps
+    max_delta_rate = 0.0
+    last_rate = 0.0
+    for i in range(1, num_steps + 1):
+        t = i / num_steps
+        current_rate = 0.0
+        if easefunc.__name__ == 'Drift':
+            current_rate = easefunc(t, dx, dy) 
+        else:
+            current_rate = easefunc(t)
+        delta_rate = current_rate - last_rate
+        if delta_rate > max_delta_rate:
+            max_delta_rate = delta_rate
+        last_rate = current_rate
+    res_multiplier = 1.0
+    if linear_delta_rate > 0 and max_delta_rate > linear_delta_rate:
+        res_multiplier = max_delta_rate / linear_delta_rate
+        logger.log(f'イージング最大速度に基づき解像度を調整 (x{res_multiplier:.2f})')
+    else:
+        logger.log(f'イージングは低速なため基本解像度を使用。')
+    return res_multiplier
+
+
 def interpolate(start, end, rate):
     return start*(1-rate) + end*rate
 
 
 def ease(self, dur, text : str, line):
     u_text = text.upper()
-    flag = 0
     dx = 6
     dy = 6
     if len(u_text.split('_')) > 2:
         dx = float(u_text.split('_')[1])
         dy = float(u_text.split('_')[2])
     print(dx, dy)
-    if u_text != 'EASE':
-        if u_text[:4] == 'EASE':
-            u_text = u_text[4:]
-        if u_text[:2] == 'IO':
-            u_text = 'INOUT' + u_text[2:]
-        if (u_text[0] == 'I') & (u_text[1] != 'N'):
-            u_text = 'IN' + u_text[1:]
-        if (u_text[0] == 'O') & (u_text[1] != 'U'):
-            u_text = 'OUT' + u_text[1:]
-        for easetype in easetypes:
-            u_easetype = easetype.upper()
-            if u_text.startswith(u_easetype):
-                self.logger.log(f'easeコマンド {easetype} を検出')
-                easefunc = eval(easetype)
-                flag = 1
-                break
-    if flag == 0:
-        if u_text.startswith('EASE'):
-            self.logger.log(f'easeコマンドを検出')
-            self.logger.log(
-                f'有効なeasing関数名が指定されていないため、easeInOutCubic（CameraPlus デフォルト）を返します')
-            easefunc = InOutCubic
+    easefunc = None
+    easetype_name = None
+    text_to_parse = u_text
+    if u_text == 'EASE':
+        self.logger.log(f'easeコマンドを検出')
+        self.logger.log(
+            f'有効なeasing関数名が指定されていないため、easeInOutCubic（CameraPlus デフォルト）を返します')
+        easefunc = InOutCubic
+        easetype_name = 'InOutCubic'
+    elif u_text.startswith('EASE'):
+        text_to_parse = u_text[4:]
+        easefunc, dx_parsed, dy_parsed, easetype_name = parse_easing_func(text_to_parse, self.logger, log_prefix='easeコマンド ')
+        if easetype_name == 'Drift':
+            pass
         else:
+            dx = dx_parsed 
+            dy = dy_parsed
+    else:
+        easefunc, dx_parsed, dy_parsed, easetype_name = parse_easing_func(text_to_parse, self.logger, log_prefix='easeコマンド ')
+        if easetype_name == 'Drift':
+            pass
+        else:
+            dx = dx_parsed
+            dy = dy_parsed
+    if easefunc is None:
+        if u_text != 'EASE':
             self.logger.log(f'! 有効なeaseコマンドを検出できません !')
             self.logger.log(f'EaseTransition: False としますが、意図しない演出になっています。')
             self.lines.append(line)
@@ -317,3 +349,45 @@ def ease(self, dur, text : str, line):
         self.logger.log(new_line.start)
         self.lines.append(new_line)
         self.lastTransform = new_line.end
+
+
+def parse_easing_func(text, logger, log_prefix=''):
+    if not text:
+        return None, 6, 6, None
+    u_text = text.upper().strip()
+    dx = 6
+    dy = 6
+    easetype_name = None
+    easefunc = None
+    if u_text.startswith('DRIFT'):
+        split_params = u_text.split('_')
+        if len(split_params) > 2:
+            dx = float(split_params[1])
+            dy = float(split_params[2])
+        u_text = 'DRIFT' 
+    if u_text[:2] == 'IO':
+        u_text = 'INOUT' + u_text[2:]
+    if (u_text and u_text[0] == 'I') and (len(u_text) == 1 or u_text[1] != 'N'):
+        u_text = 'IN' + u_text[1:]
+    if (u_text and u_text[0] == 'O') and (len(u_text) == 1 or u_text[1] != 'U'):
+        u_text = 'OUT' + u_text[1:]
+    found_ease = False
+    for easetype in easetypes:
+        u_easetype = easetype.upper()
+        if u_text.startswith(u_easetype):
+            if logger:
+                logger.log(f'{log_prefix}ease関数 {easetype} を検出')
+            try:
+                easefunc = globals()[easetype] 
+            except KeyError:
+                if logger:
+                    logger.log(f'{log_prefix}! {easetype} の関数実体が見つかりません !')
+                easefunc = None
+            easetype_name = easetype
+            found_ease = True
+            break
+    if not found_ease:
+        if logger and text:
+            logger.log(f'{log_prefix}! 有効なease関数名 "{text}" を検出できませんでした !')
+        return None, dx, dy, None
+    return easefunc, dx, dy, easetype_name

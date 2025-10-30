@@ -14,7 +14,7 @@ from BookmarkUtils import copy_process, fill_process, raw_process
 from CommandUtils import long_command, parse_command
 from EnvCommandUtils import env_command
 from EaseUtils import ease
-from LongCommandsUtils import rot, vib
+from LongCommandsUtils import rot, vib, rvib
 
 
 class ScriptMapper:
@@ -306,13 +306,17 @@ class ScriptMapper:
             self.logger.log(f'transition : {transition_command}')
             if transition_command != 'False':
                 if transition_command[:3].lower() == 'rot':
-                    new_line.rot = transition_command
+                    new_line.rot = ','.join(parse[2:])
                     self.logger.log(
                         f'rot に文字列を確認しましたが、回転の処理は、next の後に行う必要があるため、後で再計算します。')
                 elif transition_command[:3].lower() == 'vib':
-                    new_line.vib = transition_command
+                    new_line.vib = ','.join(parse[2:])
                     self.logger.log(
                         f'vib に文字列を確認しましたが、vibroの処理は、next の後に行う必要があるため、後で再計算します。')
+                elif transition_command[:4].lower() == 'rvib':
+                    new_line.rvib = ','.join(parse[2:])
+                    self.logger.log(
+                        f'rvib に文字列を確認しましたが、rvibの処理は、next の後に行う必要があるため、後で再計算します。')
                 else:
                     # ease(self, dur, ease_command, new_line)
                     new_line.ease = transition_command
@@ -358,6 +362,16 @@ class ScriptMapper:
         for org in original:
             if org.vib != '':
                 vib(self, org.duration, org.vib, org)
+            else:
+                self.lines.append(org)
+
+    def rvib_calc(self):
+        self.logger.log('\nrvibの処理が臨時的にここにログに出されます。')
+        original = deepcopy(self.lines)
+        self.lines = []
+        for org in original:
+            if hasattr(org, 'rvib') and org.rvib != '':
+                rvib(self, org.duration, org.rvib, org)
             else:
                 self.lines.append(org)
 

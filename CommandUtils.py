@@ -109,12 +109,7 @@ def long_command(self, text, dur) -> bool:
     if text[:6] == 'rotate':
         self.logger.log(text)
         self.logger.log('rotate コマンドを確認')
-        if any([c.isalpha() for c in text[6:]]):
-            self.logger.log(
-                f'パラメータ {text[6:]} に英字を確認。セキュリティの問題上、プログラムを強制終了します。')
-            input()
-            exit()
-        rotate(self, text, dur)
+        rotate(self, text[6:], dur) 
         return True
     # vibro
     if text[:5] == 'vibro':

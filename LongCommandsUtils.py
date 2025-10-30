@@ -1,13 +1,153 @@
 import os
 import json
+import re
 
 from random import random
-from math import atan2, pi, sin, cos, degrees, sqrt
+from math import atan2, pi, sin, cos, degrees, sqrt, ceil
 from copy import deepcopy
-from BasicElements import Pos, Rot, Line
+from BasicElements import Pos, Rot, Line, Transform
+from shake_data import SHAKE_LIST
+from EaseUtils import parse_easing_func, calculate_adaptive_multiplier
+
+def get_shake_value(shake_data, frame):
+    if not shake_data:
+        return 0
+    for i in range(len(shake_data) - 1):
+        if shake_data[i][0] <= frame < shake_data[i+1][0]:
+            t = (frame - shake_data[i][0]) / (shake_data[i+1][0] - shake_data[i][0])
+            return shake_data[i][1] * (1 - t) + shake_data[i+1][1] * t
+    return shake_data[-1][1]
+
+
+def rvib(self, dur, text, line):
+    param_str = text[4:]
+    if param_str and (param_str[0] == '_' or param_str[0] == ','):
+        param_str = param_str[1:]
+    params_list = [p.strip() for p in param_str.split(',') if p.strip()]
+    numeric_params_list = params_list
+    ease_func = None
+    dx = 6
+    dy = 6
+    easetype_name = None
+    if params_list:
+        last_param_str = params_list[-1]
+        u_text = last_param_str.upper()
+        found_ease_obj = False
+        if any([c.isalpha() for c in u_text]):
+            ease_func, dx, dy, easetype_name = parse_easing_func(u_text, self.logger, log_prefix='rvib ')
+            if ease_func:
+                found_ease_obj = True
+        if found_ease_obj:
+            numeric_params_list = params_list[:-1]
+    if ease_func is None:
+        ease_func = lambda t: t
+    if not numeric_params_list:
+        self.logger.log(f'! rvib: シェイク名が指定されていません !')
+        self.lines.append(line)
+        return
+    shake_name = numeric_params_list[0].upper()
+    strength = float(numeric_params_list[1]) if len(numeric_params_list) > 1 and numeric_params_list[1] else 1.0
+    speed = float(numeric_params_list[2]) if len(numeric_params_list) > 2 and numeric_params_list[2] else 1.0
+    pos_scale = float(numeric_params_list[3]) if len(numeric_params_list) > 3 and numeric_params_list[3] else 1.0
+    rot_scale = float(numeric_params_list[4]) if len(numeric_params_list) > 4 and numeric_params_list[4] else 1.0
+    if shake_name not in SHAKE_LIST:
+        self.logger.log(f'! rvib: 手ブレ名 "{shake_name}" が見つかりません !')
+        self.lines.append(line)
+        return
+    shake_info = SHAKE_LIST[shake_name]
+    shake_fps = shake_info[1]
+    shake_data = shake_info[2]
+    ixp, iyp, izp = line.start.pos.unpack()
+    ixr, iyr, izr = line.start.rot.unpack()
+    lxp, lyp, lzp = line.end.pos.unpack()
+    lxr, lyr, lzr = line.end.rot.unpack()
+    iFOV = line.start.fov
+    lFOV = line.end.fov
+    spans = []
+    span = 1 / 60
+    temp_dur = dur
+    while temp_dur > 0:
+        min_span = min(span, temp_dur)
+        if temp_dur - min_span < 0.01:
+            min_span = temp_dur
+        spans.append(min_span)
+        temp_dur -= min_span
+    span_size = len(spans)
+    total_duration = sum(spans)
+    if total_duration == 0:
+        self.lines.append(line)
+        return
+    for i in range(span_size):
+        new_line = Line(spans[i])
+        new_line.visibleDict = deepcopy(line.visibleDict)
+        progress = (sum(spans[:i]) + spans[i] / 2) / total_duration
+        frame = progress * total_duration * shake_fps * speed
+        dx_s = get_shake_value(shake_data.get(('location', 0)), frame) * strength * pos_scale
+        dy_s = get_shake_value(shake_data.get(('location', 1)), frame) * strength * pos_scale
+        dz_s = get_shake_value(shake_data.get(('location', 2)), frame) * strength * pos_scale
+        drx_s = get_shake_value(shake_data.get(('rotation_euler', 0)), frame) * strength * rot_scale * 180 / pi
+        dry_s = get_shake_value(shake_data.get(('rotation_euler', 1)), frame) * strength * rot_scale * 180 / pi
+        drz_s = get_shake_value(shake_data.get(('rotation_euler', 2)), frame) * strength * rot_scale * 180 / pi
+        if i == 0:
+            new_line.start.pos = Pos(ixp, iyp, izp)
+            new_line.start.rot = Rot(ixr, iyr, izr)
+            new_line.start.fov = iFOV
+        else:
+            new_line.start = deepcopy(self.lastTransform)
+        t_end = (i + 1) / span_size
+        rate_end = 0.0
+        if easetype_name == 'Drift':
+            rate_end = ease_func(t_end, dx, dy)
+        else:
+            rate_end = ease_func(t_end)
+        px2 = ixp + (lxp - ixp) * rate_end
+        py2 = iyp + (lyp - iyp) * rate_end
+        pz2 = izp + (lzp - izp) * rate_end
+        rx2 = ixr + (lxr - ixr) * rate_end
+        ry2 = iyr + (lyr - iyr) * rate_end
+        rz2 = izr + (lzr - izr) * rate_end
+        fov2 = iFOV + (lFOV - iFOV) * rate_end
+        new_line.end.pos = Pos(px2 + dx_s, py2 + dy_s, pz2 + dz_s)
+        new_line.end.rot = Rot(rx2 + drx_s, ry2 + dry_s, rz2 + drz_s)
+        new_line.end.fov = fov2
+        if i == span_size - 1:
+            new_line.end.pos = Pos(lxp, lyp, lzp)
+            new_line.end.rot = Rot(lxr, lyr, lzr)
+            new_line.end.fov = lFOV
+        self.lastTransform = new_line.end
+        self.lines.append(new_line)
 
 
 def rotate(self, text, dur):
+    params_list = []
+    if text:
+        params_list = text.split(',')
+    numeric_params_list = []
+    special_params_list = []
+    found_ease_name = False
+    for param in params_list:
+        param_stripped = param.strip()
+        if not found_ease_name and any([c.isalpha() for c in param_stripped]):
+            found_ease_name = True
+        if found_ease_name:
+            special_params_list.append(param_stripped)
+        else:
+            numeric_params_list.append(param)
+    numeric_text = ','.join(numeric_params_list)
+    if any([c.isalpha() for c in numeric_text]): 
+        self.logger.log(
+            f'数値パラメータ {numeric_text} に英字を確認。セキュリティの問題上、プログラムを強制終了します。')
+        input()
+        exit()
+    ease_name_str = None
+    if len(special_params_list) > 0:
+        ease_name_str = special_params_list[0].strip()
+    easefunc = None 
+    dx = 6 
+    dy = 6 
+    easetype_name = None
+    if ease_name_str and ease_name_str != '': 
+        easefunc, dx, dy, easetype_name = parse_easing_func(ease_name_str, self.logger, log_prefix='rotate ')
     # def_value
     r1 = 3
     h1 = 3
@@ -16,8 +156,8 @@ def rotate(self, text, dur):
     s1 = 0
     j = 0
     w = 360
-    if len(text) > 6:
-        param = [eval(i) for i in text[6:].split(',')]
+    if len(numeric_text) > 0:
+        param = [eval(i) for i in numeric_text.split(',') if i.strip()]
         if len(param) > 0:
             r1 = param[0]
         if len(param) > 1:
@@ -44,11 +184,28 @@ def rotate(self, text, dur):
             s2 = param[9]
         else:
             s2 = s1
+    is_linear = False
+    if easefunc is None:
+        easefunc = lambda t: t 
+        is_linear = True
+        self.logger.log('rotate で線形補間を使用します。')
+    else:
+        self.logger.log(f'rotate でイージング {easetype_name} を使用します。')
     self.logger.log(
         f'パラメータ r1:{r1} h1:{h1} a:{a} o:{o} s1:{s1} j:{j} w:{w} r2:{r2} h2:{h2} s2:{s2}')
-    p = 5 if w < 360 else 10
+    base_p = 5 if w < 360 else 10
+    p = base_p
+    if not is_linear and dur > 0:
+        res_multiplier = calculate_adaptive_multiplier(easefunc, dur, dx, dy, self.logger)
+        
+        p = base_p / res_multiplier 
+        
+        self.logger.log(f'p: {p} (base_p: {base_p} / mult: {res_multiplier})')
+    else:
+        self.logger.log(f'線形補間。基本解像度を使用。 p: {p}')
     span = max(1/30, dur/abs(w/p))
     spans = []
+    init_dur = dur
     while dur > 0:
         min_span = min(span, dur)
         if dur - min_span < 0.01:
@@ -56,41 +213,75 @@ def rotate(self, text, dur):
         spans.append(min_span)
         dur -= min_span
     span_size = len(spans)
+    rate_start = 0.0 
+    theta = 2*pi * rate_start * (w/360) - 1/2*pi + j*2*pi/360
+    r = r1 + (r2-r1) * rate_start
+    h = h1 + (h2-h1) * rate_start
+    s = s1 + (s2-s1) * rate_start
+    angle = atan2(h-a, r)
+    px = round(r*cos(theta), 3)
+    pz = round(r*sin(theta)+o, 3)
+    rx = degrees(angle)
+    ry = -degrees(theta)+270
+    self.lastTransform = Transform(Pos(px, h, pz), Rot(rx, ry, s), self.fov)
     for i in range(span_size):
         new_line = Line(spans[i])
         new_line.visibleDict = deepcopy(self.visibleObject.state)
-        theta = 2*pi*i*(w/360)/span_size - 1/2*pi + j*2*pi/360
-        next_theta = 2*pi*(i+1)*(w/360)/span_size - 1/2*pi + j*2*pi/360
-        r = r1 + (r2-r1)*i/span_size
-        h = h1 + (h2-h1)*i/span_size
-        s = s1 + (s2-s1)*i/span_size
+        new_line.start = deepcopy(self.lastTransform)
+        t = sum(spans[:(i+1)]) / init_dur
+        if t > 1:
+            t = 1
+        rate = 0.0
+        if easetype_name == 'Drift':
+            rate = easefunc(t, dx, dy) 
+        else:
+            rate = easefunc(t)
+        theta = 2*pi * rate * (w/360) - 1/2*pi + j*2*pi/360
+        r = r1 + (r2-r1) * rate
+        h = h1 + (h2-h1) * rate
+        s = s1 + (s2-s1) * rate
         angle = atan2(h-a, r)
         px = round(r*cos(theta), 3)
         pz = round(r*sin(theta)+o, 3)
         rx = degrees(angle)
         ry = -degrees(theta)+270
-        new_line.start.pos = Pos(px, h, pz)
-        new_line.start.rot = Rot(rx, ry, s)
-        new_line.start.fov = self.fov
-        r = r1 + (r2-r1)*(i+1)/span_size
-        h = h1 + (h2-h1)*(i+1)/span_size
-        s = s1 + (s2-s1)*(i+1)/span_size
-        angle = atan2(h-a, r)
-        px = round(r*cos(next_theta), 3)
-        pz = round(r*sin(next_theta)+o, 3)
-        rx = degrees(angle)
-        ry = -degrees(next_theta)+270
-        new_line.end.pos = Pos(px, h, pz)
-        new_line.end.rot = Rot(rx, ry, s)
-        new_line.end.fov = self.fov
+        endPos = Pos(px, h, pz)
+        endRot = Rot(rx, ry, s)
+        new_line.end = Transform(endPos, endRot, self.fov)
         self.logger.log(new_line.start)
         self.lines.append(new_line)
+        self.lastTransform = new_line.end
 
 
 def rot(self, dur, text, line):
+    self.logger.log(f'rot コマンド解析開始: "{text}"')
+    params_list = re.split('[_,]',text[3:]) 
+    numeric_params_list = []
+    special_params_list = []
+    found_ease_name = False
+    for param in params_list:
+        param_stripped = param.strip()
+        if not found_ease_name and any([c.isalpha() for c in param_stripped]):
+            found_ease_name = True
+        if found_ease_name:
+            special_params_list.append(param_stripped)
+        else:
+            numeric_params_list.append(param)
+    ease_func = None
+    dx = 6
+    dy = 6
+    easetype_name = None
+    if found_ease_name:
+        ease_name_str = special_params_list[0]
+        ease_func, dx, dy, easetype_name = parse_easing_func(ease_name_str, self.logger, log_prefix='rot ')
+    is_linear = ease_func is None
+    if is_linear:
+        ease_func = lambda t: t
     n = None
     o = 0
-    for param in text[3:].split('_'):
+    for param in numeric_params_list:
+        if param.strip() == '':
+            continue
         try:
             if n is None:
                 n = float(eval(param))
@@ -116,6 +307,10 @@ def rot(self, dur, text, line):
     lr = sqrt(lxp**2+lzp**2)
     itheta = atan2(izp, ixp) % (2*pi)
     ltheta = atan2(lzp, lxp) % (2*pi)
+    dtheta = 0.0 
+    if n is None:
+        self.logger.log(f'! rotのnパラメータが指定されていません !')
+        n = 0
     if n > 0:
         if ltheta > itheta:
             dtheta = ltheta-itheta + 2*pi*(n-1)
@@ -133,9 +328,17 @@ def rot(self, dur, text, line):
         self.logger.log(line.start)
         self.logger.log(line.end)
         return
-    p = 5 if dtheta < 2*pi else 10
+    base_p = 5 if dtheta < 2*pi else 10
+    p = base_p
+    if not is_linear and dur > 0:
+        res_multiplier = calculate_adaptive_multiplier(ease_func, dur, dx, dy, self.logger)
+        p = base_p / res_multiplier
+        self.logger.log(f'rot p: {p} (base_p: {base_p} / mult: {res_multiplier})')
+    else:
+        self.logger.log(f'rot 線形補間。基本解像度を使用。 p: {p}')
     span = max(1/30, dur/degrees(abs(dtheta)/p))
     spans = []
+    init_dur = dur
     while dur > 0:
         min_span = min(span, dur)
         if dur - min_span < 0.01:
@@ -143,28 +346,29 @@ def rot(self, dur, text, line):
         spans.append(min_span)
         dur -= min_span
     span_size = len(spans)
+    init_dur = sum(spans)
+    if init_dur == 0:
+        self.lines.append(line)
+        return
+    self.lastTransform = line.start 
     for i in range(span_size):
         new_line = Line(spans[i])
         # new_line.visibleDict = deepcopy(self.visibleObject.state)
         new_line.visibleDict = deepcopy(line.visibleDict)
-        theta1 = itheta + dtheta*i/span_size
-        r1 = ir + (lr-ir)*i/span_size
-        h1 = iyp + (lyp-iyp)*i/span_size
-        s1 = izr + (lzr-izr)*i/span_size
-        fov1 = iFOV + (lFOV-iFOV)*i/span_size
-        rx1 = ixr + (lxr-ixr)*i/span_size
-        px = round(r1*cos(theta1), 3)
-        pz = round(r1*sin(theta1)+o, 3)
-        ry = -degrees(theta1)+270
-        new_line.start.pos = Pos(px, h1, pz)
-        new_line.start.rot = Rot(rx1, ry, s1)
-        new_line.start.fov = fov1
-        theta2 = itheta + dtheta*(i+1)/span_size
-        r2 = ir + (lr-ir)*(i+1)/span_size
-        h2 = iyp + (lyp-iyp)*(i+1)/span_size
-        s2 = izr + (lzr-izr)*(i+1)/span_size
-        fov2 = iFOV + (lFOV-iFOV)*(i+1)/span_size
-        rx2 = ixr + (lxr-ixr)*(i+1)/span_size
+        new_line.start = deepcopy(self.lastTransform)
+        t_end = sum(spans[:(i+1)]) / init_dur
+        if t_end > 1: t_end = 1
+        rate_end = 0.0
+        if easetype_name == 'Drift':
+            rate_end = ease_func(t_end, dx, dy)
+        else:
+            rate_end = ease_func(t_end)
+        theta2 = itheta + dtheta * rate_end
+        r2 = ir + (lr-ir) * rate_end
+        h2 = iyp + (lyp-iyp) * rate_end
+        s2 = izr + (lzr-izr) * rate_end
+        fov2 = iFOV + (lFOV-iFOV) * rate_end
+        rx2 = ixr + (lxr-ixr) * rate_end
         px = round(r2*cos(theta2), 3)
         pz = round(r2*sin(theta2)+o, 3)
         ry = -degrees(theta2)+270
@@ -173,6 +377,7 @@ def rot(self, dur, text, line):
         new_line.end.fov = fov2
         self.logger.log(new_line.start)
         self.lines.append(new_line)
+        self.lastTransform = new_line.end
 
 
 def vibro(self, dur, param):
@@ -202,8 +407,23 @@ def vibro(self, dur, param):
 
 
 def vib(self, dur, text, line):
+    param_str = text[3:]
+    params_list = param_str.split(',')
+    numeric_param_str = params_list[0]
+    special_params_list = params_list[1:]
+    ease_func = None
+    dx = 6
+    dy = 6
+    easetype_name = None
+    if len(special_params_list) > 0:
+        ease_name_str = special_params_list[0].strip()
+        if ease_name_str:
+            ease_func, dx, dy, easetype_name = parse_easing_func(ease_name_str, self.logger, log_prefix='vib ')
+    is_linear = ease_func is None
+    if is_linear:
+        ease_func = lambda t: t
     try:
-        param = float(eval(text[3:]))
+        param = float(eval(numeric_param_str))
     except:
         self.logger.log(f'! vibの後の数値が不正です !')
         self.logger.log(f'vib: False としますが、意図しない演出になっています。')
@@ -221,18 +441,26 @@ def vib(self, dur, text, line):
     lyr = lyr if abs(lyr-iyr) < 180 else (lyr+180) % 360 - 180
     iFOV = line.start.fov
     lFOV = line.end.fov
-    dx, dy, dz = 0, 0, 0
     spans = []
     bpm = self.bpm
-    span = max(1/30, param*60/bpm)
+    span = max(1/30, param*60/bpm) 
+    init_dur = dur
+    if not is_linear and init_dur > 0:
+        res_multiplier = calculate_adaptive_multiplier(ease_func, init_dur, dx, dy, self.logger)
+        if res_multiplier > 1:
+            span = span / res_multiplier
+            self.logger.log(f'vib span 調整 (/{res_multiplier:.2f}) -> {span}')
     while dur > 0:
         min_span = min(span, dur)
         if dur - min_span < 0.01:
             min_span = dur
         spans.append(min_span)
         dur -= min_span
-    spans = [sum(spans)/len(spans)]*len(spans)
     span_size = len(spans)
+    init_dur = sum(spans) 
+    if init_dur == 0:
+        self.lines.append(line)
+        return
     for i in range(span_size):
         new_line = Line(spans[i])
         # new_line.visibleDict = deepcopy(self.visibleObject.state)
@@ -242,17 +470,24 @@ def vib(self, dur, text, line):
             new_line.start.pos = Pos(ixp, iyp, izp)
             new_line.start.rot = Rot(ixr, iyr, izr)
             new_line.start.fov = iFOV
-        dx = round(random()/6, 3)-1/12
-        dy = round(random()/6, 3)-1/12
-        dz = round(random()/6, 3)-1/12
-        px2 = ixp + (lxp-ixp)*(i+1)/span_size
-        py2 = iyp + (lyp-iyp)*(i+1)/span_size
-        pz2 = izp + (lzp-izp)*(i+1)/span_size
-        rx2 = ixr + (lxr-ixr)*(i+1)/span_size
-        ry2 = iyr + (lyr-iyr)*(i+1)/span_size
-        rz2 = izr + (lzr-izr)*(i+1)/span_size
-        fov2 = iFOV + (lFOV-iFOV)*(i+1)/span_size
-        new_line.end.pos = Pos(px2+dx, py2+dy, pz2+dz)
+        dx_r = round(random()/6, 3)-1/12
+        dy_r = round(random()/6, 3)-1/12
+        dz_r = round(random()/6, 3)-1/12
+        t_end = sum(spans[:(i+1)]) / init_dur
+        if t_end > 1: t_end = 1
+        rate_end = 0.0
+        if easetype_name == 'Drift':
+            rate_end = ease_func(t_end, dx, dy)
+        else:
+            rate_end = ease_func(t_end)
+        px2 = ixp + (lxp-ixp) * rate_end
+        py2 = iyp + (lyp-iyp) * rate_end
+        pz2 = izp + (lzp-izp) * rate_end
+        rx2 = ixr + (lxr-ixr) * rate_end
+        ry2 = iyr + (lyr-iyr) * rate_end
+        rz2 = izr + (lzr-izr) * rate_end
+        fov2 = iFOV + (lFOV-iFOV) * rate_end
+        new_line.end.pos = Pos(px2+dx_r, py2+dy_r, pz2+dz_r)
         new_line.end.rot = Rot(rx2, ry2, rz2)
         new_line.end.fov = fov2
         if i == span_size-1:

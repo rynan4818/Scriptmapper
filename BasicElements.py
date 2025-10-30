@@ -109,6 +109,7 @@ class Line:
         self.ease = ''
         self.rot = ''
         self.vib = ''
+        self.rvib = ''
 
     def __str__(self) -> str:
         return (f'{self.duration:6.2f} {self.start} {self.end}')

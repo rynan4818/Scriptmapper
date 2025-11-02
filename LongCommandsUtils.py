@@ -77,29 +77,38 @@ def rvib(self, dur, text, line):
     if total_duration == 0:
         self.lines.append(line)
         return
+    last_rate = 0.0
     for i in range(span_size):
         new_line = Line(spans[i])
         new_line.visibleDict = deepcopy(line.visibleDict)
-        progress = (sum(spans[:i]) + spans[i] / 2) / total_duration
-        frame = progress * total_duration * shake_fps * speed
-        dx_s = get_shake_value(shake_data.get(('location', 0)), frame) * strength * pos_scale
-        dy_s = get_shake_value(shake_data.get(('location', 1)), frame) * strength * pos_scale
-        dz_s = get_shake_value(shake_data.get(('location', 2)), frame) * strength * pos_scale
-        drx_s = get_shake_value(shake_data.get(('rotation_euler', 0)), frame) * strength * rot_scale * 180 / pi
-        dry_s = get_shake_value(shake_data.get(('rotation_euler', 1)), frame) * strength * rot_scale * 180 / pi
-        drz_s = get_shake_value(shake_data.get(('rotation_euler', 2)), frame) * strength * rot_scale * 180 / pi
+        t_start = sum(spans[:i]) / total_duration
+        t_end = sum(spans[:(i+1)]) / total_duration
+        if t_end > 1: t_end = 1
+        rate_start = 0.0
+        rate_end = 0.0
+        if easetype_name == 'Drift':
+            rate_start = ease_func(t_start, dx, dy)
+            rate_end = ease_func(t_end, dx, dy)
+        else:
+            rate_start = ease_func(t_start)
+            rate_end = ease_func(t_end)
+        delta_t = t_end - t_start
+        delta_rate = rate_end - last_rate
+        speed_multiplier = delta_rate / delta_t if delta_t > 1e-6 else 0
+        last_rate = rate_end
+        frame = t_end * total_duration * shake_fps * speed
+        dx_s = get_shake_value(shake_data.get(('location', 0)), frame) * strength * pos_scale * speed_multiplier
+        dy_s = get_shake_value(shake_data.get(('location', 1)), frame) * strength * pos_scale * speed_multiplier
+        dz_s = get_shake_value(shake_data.get(('location', 2)), frame) * strength * pos_scale * speed_multiplier
+        drx_s = get_shake_value(shake_data.get(('rotation_euler', 0)), frame) * strength * rot_scale * 180 / pi * speed_multiplier
+        dry_s = get_shake_value(shake_data.get(('rotation_euler', 1)), frame) * strength * rot_scale * 180 / pi * speed_multiplier
+        drz_s = get_shake_value(shake_data.get(('rotation_euler', 2)), frame) * strength * rot_scale * 180 / pi * speed_multiplier
         if i == 0:
             new_line.start.pos = Pos(ixp, iyp, izp)
             new_line.start.rot = Rot(ixr, iyr, izr)
             new_line.start.fov = iFOV
         else:
             new_line.start = deepcopy(self.lastTransform)
-        t_end = (i + 1) / span_size
-        rate_end = 0.0
-        if easetype_name == 'Drift':
-            rate_end = ease_func(t_end, dx, dy)
-        else:
-            rate_end = ease_func(t_end)
         px2 = ixp + (lxp - ixp) * rate_end
         py2 = iyp + (lyp - iyp) * rate_end
         pz2 = izp + (lzp - izp) * rate_end
@@ -461,6 +470,7 @@ def vib(self, dur, text, line):
     if init_dur == 0:
         self.lines.append(line)
         return
+    last_rate = 0.0
     for i in range(span_size):
         new_line = Line(spans[i])
         # new_line.visibleDict = deepcopy(self.visibleObject.state)
@@ -470,16 +480,24 @@ def vib(self, dur, text, line):
             new_line.start.pos = Pos(ixp, iyp, izp)
             new_line.start.rot = Rot(ixr, iyr, izr)
             new_line.start.fov = iFOV
-        dx_r = round(random()/6, 3)-1/12
-        dy_r = round(random()/6, 3)-1/12
-        dz_r = round(random()/6, 3)-1/12
+        t_start = sum(spans[:i]) / init_dur
         t_end = sum(spans[:(i+1)]) / init_dur
         if t_end > 1: t_end = 1
+        rate_start = 0.0
         rate_end = 0.0
         if easetype_name == 'Drift':
+            rate_start = ease_func(t_start, dx, dy)
             rate_end = ease_func(t_end, dx, dy)
         else:
+            rate_start = ease_func(t_start)
             rate_end = ease_func(t_end)
+        delta_t = t_end - t_start
+        delta_rate = rate_end - last_rate
+        speed_multiplier = delta_rate / delta_t if delta_t > 1e-6 else 0
+        last_rate = rate_end
+        dx_r = (round(random()/6, 3)-1/12) * speed_multiplier
+        dy_r = (round(random()/6, 3)-1/12) * speed_multiplier
+        dz_r = (round(random()/6, 3)-1/12) * speed_multiplier
         px2 = ixp + (lxp-ixp) * rate_end
         py2 = iyp + (lyp-iyp) * rate_end
         pz2 = izp + (lzp-izp) * rate_end

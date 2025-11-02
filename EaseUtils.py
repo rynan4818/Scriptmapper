@@ -1,5 +1,6 @@
 from copy import deepcopy
-from math import cos, pi, sin, sqrt, ceil
+from math import cos, pi, sin, sqrt, ceil, pow
+import re
 
 from BasicElements import Pos, Rot, Line, Transform
 
@@ -37,6 +38,27 @@ easetypes = ['InSine',
              'InOutBounce',
              'Drift',
              ]
+
+
+def make_in_pow(p):
+    def InPow(t):
+        return pow(t, p)
+    InPow.__name__ = f'In{p}'
+    return InPow
+
+
+def make_out_pow(p):
+    def OutPow(t):
+        return 1 - pow(1 - t, p)
+    OutPow.__name__ = f'Out{p}'
+    return OutPow
+
+
+def make_in_out_pow(p):
+    def InOutPow(t):
+        return pow(2, p - 1) * pow(t, p) if t < 0.5 else 1 - pow(-2 * t + 2, p) / 2
+    InOutPow.__name__ = f'InOut{p}'
+    return InOutPow
 
 
 def InSine(t):
@@ -386,6 +408,31 @@ def parse_easing_func(text, logger, log_prefix=''):
             easetype_name = easetype
             found_ease = True
             break
+    if not found_ease:
+        match = re.match(r'^(INOUT|IN|OUT)(\d+\.?\d*)$', u_text)
+        if match:
+            prefix = match.group(1)
+            param_str = match.group(2)
+            try:
+                p = float(param_str)
+                if p < 1:
+                    if logger:
+                        logger.log(f'{log_prefix}! イージングの数値パラメータは 1以上が必要です: "{text}" !')
+                    return None, dx, dy, None
+                if prefix == "IN":
+                    easefunc = make_in_pow(p)
+                    easetype_name = f'In{p}'
+                elif prefix == "OUT":
+                    easefunc = make_out_pow(p)
+                    easetype_name = f'Out{p}'
+                elif prefix == "INOUT":
+                    easefunc = make_in_out_pow(p)
+                    easetype_name = f'InOut{p}'
+                if logger:
+                    logger.log(f'{log_prefix}数値指定のease関数 {easetype_name} を検出')
+                found_ease = True
+            except ValueError:
+                pass
     if not found_ease:
         if logger and text:
             logger.log(f'{log_prefix}! 有効なease関数名 "{text}" を検出できませんでした !')

@@ -69,13 +69,29 @@ class ScriptMapper:
             self.logger.log('info.dat が見つかりません。プログラムを終了します。')
             input()
             exit()
-        f = open(info_path, 'rb')
-        j = json.load(f)
-        bpm = j['_beatsPerMinute']
+        
+        f_info = open(info_path, 'rb')
+        j_info = json.load(f_info)
+        
+        bpm = 0
+        if '_beatsPerMinute' in j_info:
+            bpm = j_info['_beatsPerMinute'] # V2
+            self.logger.log('V2形式のデフォルトBPMを検出')
+        elif 'audio' in j_info and 'bpm' in j_info['audio']:
+            bpm = j_info['audio']['bpm'] # V4
+            self.logger.log('V4形式のデフォルトBPMを検出')
+        else:
+            self.logger.log('info.dat にBPM情報が見つかりません。プログラムを終了します。')
+            f_info.close()
+            input()
+            exit()
+
         self.bpm = bpm
-        self.logger.log(f'bpmを計測 {self.bpm} \n')
-        f = open(self.file_path, 'rb')
-        j = json.load(f)
+        self.logger.log(f'デフォルトbpmを計測 {self.bpm} \n')
+
+        f_beatmap = open(self.file_path, 'rb')
+        j = json.load(f_beatmap)
+
         if '_events' in j:
             bpmChanges = j['_events'] # V2.5
             for b in bpmChanges:
@@ -88,21 +104,28 @@ class ScriptMapper:
                         'bpm': b['_floatValue']})
         if self.bpmchanges != []:
             self.logger.log('')
+            f_info.close()
+            f_beatmap.close()
             return
+            
         if '_customData' in j:
             if '_BPMChanges' not in j['_customData']:
-                return
+                pass
             else:
                 self.logger.log('CustomDataのBPMChangesを検出')
                 bpmChanges = j['_customData']['_BPMChanges']
                 for b in bpmChanges:
-                    self.logger.log(f'time : {b["_time"] * 60 / bpm:6.2f} (BPM : {b["_BPM"]})')
+                    self.logger.log(f'time : {b["_time"] * 60 / self.bpm:6.2f} (BPM : {b["_BPM"]})')
                     self.bpmchanges.append({
-                        'time': b['_time'] * 60 / bpm,
+                        'time': b['_time'] * 60 / self.bpm,
                         'bpm': b['_BPM'],
                         'perbar': b['_beatsPerBar']})
                 self.logger.log('')
-        elif 'bpmEvents' in j:
+                f_info.close()
+                f_beatmap.close()
+                return
+
+        if 'bpmEvents' in j:
             self.logger.log('V3.0のBPM Eventsを検出')
             bpmChanges = j['bpmEvents'] # V3
             for b in bpmChanges:
@@ -111,6 +134,72 @@ class ScriptMapper:
                     'grid': b['b'],
                     'bpm': b['m']})
             self.logger.log('')
+            f_info.close()
+            f_beatmap.close()
+            return
+
+        self.logger.log('V2/V3系BPM変更が見つかりません。V4 (AudioData.dat) をチェックします。\n')
+
+        audio_data_filename = None
+        if 'audio' in j_info and 'audioDataFilename' in j_info['audio']:
+            audio_data_filename = j_info['audio']['audioDataFilename']
+        
+        audio_data_path = None
+        if audio_data_filename:
+            audio_data_path = os.path.join(path_dir, audio_data_filename)
+
+        if audio_data_path and os.path.exists(audio_data_path):
+            self.logger.log(f'バージョン検出：V4 (AudioData.dat を検出)\n')
+            try:
+                f_audio = open(audio_data_path, 'r', encoding='utf-8')
+                j_audio = json.load(f_audio)
+                
+                song_freq = j_audio['songFrequency']
+                bpm_data = j_audio['bpmData']
+                
+                self.logger.log(f'AudioData.dat からBPM Eventsを読み込みます (Sampling Frequency: {song_freq} Hz)')
+
+                if bpm_data and bpm_data[0]['sb'] > 0:
+                    self.logger.log(f'grid : {0.0:6.2f} (BPM : {self.bpm}) - (デフォルト)')
+                    self.bpmchanges.append({
+                        'grid': 0.0,
+                        'bpm': self.bpm
+                    })
+
+                for b in bpm_data:
+                    si = b['si']
+                    ei = b['ei']
+                    sb = b['sb']
+                    eb = b['eb']
+                    
+                    segment_beats = eb - sb
+                    segment_samples = ei - si
+                    
+                    if segment_samples == 0 or segment_beats == 0:
+                        self.logger.log(f'grid : {sb:6.2f} (BPM : N/A) - Duration 0')
+                        continue
+
+                    segment_seconds = segment_samples / song_freq
+                    segment_bpm = (segment_beats * 60) / segment_seconds
+                    
+                    self.logger.log(f'grid : {sb:6.2f} (BPM : {segment_bpm:6.2f})')
+                    self.bpmchanges.append({
+                        'grid': sb,
+                        'bpm': segment_bpm
+                    })
+                
+                f_audio.close()
+                self.logger.log('')
+
+            except Exception as e:
+                self.logger.log(f'AudioData.dat の読み込みまたは処理に失敗しました: {e}')
+                input()
+                exit()
+        else:
+            self.logger.log('BPM変更は見つかりませんでした。\n')
+
+        f_info.close()
+        f_beatmap.close()
 
     def make_manual_commands(self):
         path_dir = self.path_obj.parent
@@ -142,13 +231,65 @@ class ScriptMapper:
                 dummyend_grid = notes[-1]['_time']+100
             elif 'b' in notes[-1]:
                 dummyend_grid = notes[-1]['b'] + 100  # V3
+        
         bookmarks = []
-        if '_customData' in j.keys():
+        
+        if '_customData' in j.keys() and '_bookmarks' in j['_customData']:
+            self.logger.log('V2 (CustomData) ブックマークを検出。')
             bookmarks = j['_customData']['_bookmarks']
-        elif 'customData' in j.keys():
+        elif 'customData' in j.keys() and 'bookmarks' in j['customData']:
+            self.logger.log('V3 ブックマークを検出。')
             bookmarks = j['customData']['bookmarks']  # V3
-        else:
+        elif '_bookmarks' in j.keys():
+            self.logger.log('V2 (Legacy) ブックマークを検出。')
             bookmarks = j['_bookmarks']
+        
+        if not bookmarks:
+            self.logger.log(f'V2/V3 ブックマークが見つからないか空です。V4形式のブックマークを探します。\n')
+            path_dir = self.path_obj.parent
+            current_filename = self.path_obj.name
+            info_path = path_dir / 'info.dat'
+            v4_name_segment = None
+
+            try:
+                f_info = open(info_path, 'r', encoding='utf-8')
+                j_info = json.load(f_info)
+                if 'difficultyBeatmaps' in j_info:
+                    for beatmap in j_info['difficultyBeatmaps']:
+                        if beatmap.get('beatmapDataFilename') == current_filename:
+                            characteristic = beatmap.get('characteristic')
+                            difficulty = beatmap.get('difficulty')
+                            if characteristic and difficulty:
+                                v4_name_segment = f"{characteristic}{difficulty}"
+                                self.logger.log(f'info.dat から V4 ブックマーク名セグメントを生成: {v4_name_segment}')
+                                break
+                f_info.close()
+            except Exception as e:
+                self.logger.log(f'info.dat の読み込み中にエラーが発生しました: {e}')
+            
+            if v4_name_segment:
+                v4_bookmark_path = path_dir / 'Bookmarks' / f'ChroMapper.{v4_name_segment}.bookmarks.dat'
+                
+                if os.path.exists(v4_bookmark_path):
+                    self.logger.log(f'バージョン検出：V4 (ChroMapper) ブックマーク\n')
+                    self.logger.log(f'V4ブックマークファイルを読み込みます: {v4_bookmark_path}')
+                    try:
+                        f_v4 = open(v4_bookmark_path, 'r', encoding='utf-8')
+                        j_v4 = json.load(f_v4)
+                        bookmarks = j_v4['bookmarks']
+                        f_v4.close()
+                    except Exception as e:
+                        self.logger.log(f'V4ブックマークファイルの読み込みに失敗しました: {e}')
+                        self.logger.log('プログラムを終了します。')
+                        input()
+                        exit()
+                else:
+                    self.logger.log(f'V4ブックマークファイルが見つかりませんでした: {v4_bookmark_path}')
+            else:
+                self.logger.log('info.dat 内に現ファイルに一致する V4 ビートマップ定義が見つかりませんでした。')
+        else:
+             self.logger.log(f'V2/V3 ブックマークを {len(bookmarks)} 件検出しました。')
+
         if len(bookmarks) == 0:
             self.logger.log('この譜面にはブックマークが含まれていません。プログラムを終了します。')
             exit()
@@ -159,6 +300,9 @@ class ScriptMapper:
             elif 'b' in bookmarks[-1]:
                 dummyend_grid = max(
                     dummyend_grid, bookmarks[-1]['b'] + 100)  # V3
+            elif 'beat' in bookmarks[-1]:
+                dummyend_grid = max(
+                    dummyend_grid, bookmarks[-1]['beat'] + 100) # V4
 
         bookmarks.append({'_time': dummyend_grid, '_name': 'dummyend'})
         self.dummyend_grid = dummyend_grid

@@ -7,10 +7,14 @@ def raw_process(self, b):
     name_key = '_name'
     if 'n' in b:
         name_key = 'n' #V3
+    elif 'text' in b:
+        name_key = 'text' #V4
 
     time_key = '_time'
     if 'b' in b:
         time_key = 'b' #V3
+    elif 'beat' in b:
+        time_key = 'beat' #V4
 
     # blanck check
     if b[name_key] == '':

@@ -285,45 +285,26 @@ def interpolate(start, end, rate):
 
 
 def ease(self, dur, text : str, line):
-    u_text = text.upper()
+    u_text = text.upper().strip()
     dx = 6
     dy = 6
-    if len(u_text.split('_')) > 2:
-        dx = float(u_text.split('_')[1])
-        dy = float(u_text.split('_')[2])
-    print(dx, dy)
     easefunc = None
-    easetype_name = None
-    text_to_parse = u_text
     if u_text == 'EASE':
         self.logger.log(f'easeコマンドを検出')
-        self.logger.log(
-            f'有効なeasing関数名が指定されていないため、easeInOutCubic（CameraPlus デフォルト）を返します')
+        self.logger.log(f'有効なeasing関数名が指定されていないため、easeInOutCubic（CameraPlus デフォルト）を返します')
         easefunc = InOutCubic
-        easetype_name = 'InOutCubic'
     elif u_text.startswith('EASE'):
-        text_to_parse = u_text[4:]
-        easefunc, dx_parsed, dy_parsed, easetype_name = parse_easing_func(text_to_parse, self.logger, log_prefix='easeコマンド ')
-        if easetype_name == 'Drift':
-            pass
-        else:
-            dx = dx_parsed 
-            dy = dy_parsed
+        easefunc, dx, dy, _ = parse_easing_func(u_text[4:], self.logger, log_prefix='easeコマンド ')
     else:
-        easefunc, dx_parsed, dy_parsed, easetype_name = parse_easing_func(text_to_parse, self.logger, log_prefix='easeコマンド ')
-        if easetype_name == 'Drift':
-            pass
-        else:
-            dx = dx_parsed
-            dy = dy_parsed
+        easefunc, dx, dy, _ = parse_easing_func(u_text, self.logger, log_prefix='easeコマンド ')
+    print(dx, dy)
     if easefunc is None:
-        if u_text != 'EASE':
-            self.logger.log(f'! 有効なeaseコマンドを検出できません !')
-            self.logger.log(f'EaseTransition: False としますが、意図しない演出になっています。')
-            self.lines.append(line)
-            self.logger.log(line.start)
-            self.logger.log(line.end)
-            return
+        self.logger.log(f'! 有効なeaseコマンドを検出できません !')
+        self.logger.log(f'EaseTransition: False としますが、意図しない演出になっています。')
+        self.lines.append(line)
+        self.logger.log(line.start)
+        self.logger.log(line.end)
+        return
     span = max(1/30, dur/36)
     spans = []
     init_dur = dur
@@ -348,10 +329,8 @@ def ease(self, dur, text : str, line):
     for i in range(span_size):
         new_line = Line(spans[i])
         new_line.visibleDict = deepcopy(line.visibleDict)
-        t = sum(spans[:(i+1)])/init_dur
+        t = min(1, sum(spans[:(i+1)])/init_dur)
         if easefunc != Drift:
-            if t > 1:
-                t = 1
             rate = easefunc(t)
         else:
             rate = Drift(t,dx,dy)
@@ -373,7 +352,7 @@ def ease(self, dur, text : str, line):
         self.lastTransform = new_line.end
 
 
-def parse_easing_func(text, logger, log_prefix=''):
+def parse_easing_func(text : str, logger, log_prefix=''):
     if not text:
         return None, 6, 6, None
     u_text = text.upper().strip()

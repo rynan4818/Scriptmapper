@@ -12,6 +12,13 @@ from EaseUtils import parse_easing_func, calculate_adaptive_multiplier
 def get_shake_value(shake_data, frame):
     if not shake_data:
         return 0
+    first_frame_number = shake_data[0][0]
+    last_frame_number = shake_data[-1][0]
+    loop_duration = last_frame_number - first_frame_number
+    if loop_duration > 0:
+        frame = ((frame - first_frame_number) % loop_duration) + first_frame_number
+    elif frame > last_frame_number:
+        return shake_data[-1][1]
     for i in range(len(shake_data) - 1):
         if shake_data[i][0] <= frame < shake_data[i+1][0]:
             t = (frame - shake_data[i][0]) / (shake_data[i+1][0] - shake_data[i][0])

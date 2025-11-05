@@ -3,11 +3,100 @@ import json
 import re
 
 from random import random
-from math import atan2, pi, sin, cos, degrees, sqrt, ceil
+from math import atan2, pi, sin, cos, degrees, sqrt, floor
 from copy import deepcopy
 from BasicElements import Pos, Rot, Line, Transform
 from shake_data import SHAKE_LIST
 from EaseUtils import parse_easing_func, calculate_adaptive_multiplier
+
+
+def _spline_catmull_rom_interpolate(p0, p1, p2, p3, t):
+    """
+    Catmull-Rom スプライン補間（1次元）
+    t (0.0-1.0) に応じて p1 と p2 の間の値を計算する。
+    """
+    t2 = t * t
+    t3 = t2 * t
+    return 0.5 * ( (2 * p1) +
+                   (-p0 + p2) * t +
+                   (2*p0 - 5*p1 + 4*p2 - p3) * t2 +
+                   (-p0 + 3*p1 - 3*p2 + p3) * t3 )
+
+
+def _spline_calculate_look_at(cam_pos, target_pos):
+    """
+    カメラの位置 (cam_pos) からターゲットの位置 (target_pos) を
+    見つめるための回転 (Rot) オブジェクトを計算する。
+    """
+    tx, ty, tz = target_pos.unpack()
+    cam_x, cam_y, cam_z = cam_pos.unpack()
+    delta_x = tx - cam_x
+    delta_y = ty - cam_y
+    delta_z = tz - cam_z
+    horizontal_dist = sqrt(delta_x**2 + delta_z**2)
+    if horizontal_dist < 1e-6:
+        horizontal_dist = 1e-6 
+    ry = degrees(atan2(delta_x, delta_z))
+    rx = -degrees(atan2(delta_y, horizontal_dist))
+    rz = 0
+    return Rot(rx, ry, rz)
+
+
+def _spline_get_arc_length_lut(control_points, num_segments, samples_per_segment=100):
+    """
+    【距離基準のためのパス1】
+    スプライン軌道の総距離を計算し、
+    (距離, グローバルt) のルックアップテーブル(LUT)を作成する。
+    """
+    lut = [(0.0, 0.0)] # (distance, global_t)
+    total_distance = 0.0
+    last_pos = control_points[0] # 最初の制御点
+    for i in range(num_segments):
+        # このセグメント(i -> i+1)の制御点を取得
+        p1 = control_points[i]
+        p2 = control_points[i + 1]
+        p0 = control_points[i - 1] if i > 0 else p1
+        p3 = control_points[i + 2] if i < (num_segments - 1) else p2
+        for j in range(1, samples_per_segment + 1):
+            local_t = j / samples_per_segment
+            global_t = i + local_t # グローバルなスプラインパラメータ t
+            # Catmull-Rom で現在の座標を計算
+            x = _spline_catmull_rom_interpolate(p0.x, p1.x, p2.x, p3.x, local_t)
+            y = _spline_catmull_rom_interpolate(p0.y, p1.y, p2.y, p3.y, local_t)
+            z = _spline_catmull_rom_interpolate(p0.z, p1.z, p2.z, p3.z, local_t)
+            # 1サンプル前の座標からの距離を計算
+            dx = x - last_pos.x
+            dy = y - last_pos.y
+            dz = z - last_pos.z
+            dist = sqrt(dx*dx + dy*dy + dz*dz) # math. を削除
+            total_distance += dist
+            lut.append((total_distance, global_t))
+            last_pos = Pos(x, y, z)
+    return lut, total_distance
+
+
+def _spline_get_t_for_distance(lut, target_distance):
+    """
+    【距離基準のためのパス2】
+    LUT を参照し、target_distance (目標距離) に
+    最も近いグローバルなスプラインパラメータ t を逆引きする。
+    """
+    # 線形探索 (LUTはソート済み)
+    for i in range(1, len(lut)):
+        dist_prev, t_prev = lut[i-1]
+        dist_curr, t_curr = lut[i]
+        if dist_curr >= target_distance:
+            # ターゲット距離を跨ぐ [prev, curr] のペアを発見
+            dist_segment = dist_curr - dist_prev
+            if dist_segment < 1e-6:
+                return t_prev # ゼロ除算を回避
+            # 2点間で線形補間して t を求める
+            ratio = (target_distance - dist_prev) / dist_segment
+            t = t_prev + (t_curr - t_prev) * ratio
+            return t
+    # ターゲット距離が総距離を超えた場合、最後の t を返す
+    return lut[-1][1]
+
 
 def get_shake_value(shake_data, frame):
     if not shake_data:
@@ -24,6 +113,203 @@ def get_shake_value(shake_data, frame):
             t = (frame - shake_data[i][0]) / (shake_data[i+1][0] - shake_data[i][0])
             return shake_data[i][1] * (1 - t) + shake_data[i+1][1] * t
     return shake_data[-1][1]
+
+
+def spline(self, text, dur): 
+    """
+    Catmull-Rom スプライン補間を行う。(距離基準 / ターゲット追従モード専用)
+    q_... 形式の座標 (8要素: px,py,pz,rx,ry,rz,fov) を補間する。
+    モード 1a (静的注視点): SPLINE, tx,ty,tz, q_..., q_...
+    モード 1b (移動注視点): SPLINE, tx1,ty1,tz1,tx2,ty2,tz2, q_..., q_...
+    モード 2 (デフォルト): SPLINE, q_..., q_... (注視点は 0, 1.6, 0)
+    """
+    self.logger.log(f'spline コマンド解析開始: "{text}"')
+    param_text = re.split('[,_]', text, 1)[-1]
+    params_list = re.split('[,]', param_text) 
+    control_point_strings = [] 
+    target_pos_params = []     
+    ease_name_str = None       
+    # 1. パラメータを「q_形式」「数値」「イージング名」に分類
+    for param in params_list:
+        param_stripped = param.strip()
+        if not param_stripped:
+            continue
+        if param_stripped.startswith('q_'):
+            control_point_strings.append(param_stripped)
+        elif param_stripped[0].isalpha(): 
+            if ease_name_str is None:
+                ease_name_str = param_stripped
+        else:
+            target_pos_params.append(param_stripped)
+    # 2. イージング関数を取得
+    ease_func, dx, dy, easetype_name = (None, 6, 6, None)
+    if ease_name_str:
+        ease_func, dx, dy, easetype_name = parse_easing_func(ease_name_str, self.logger, log_prefix='spline ')
+    is_linear = ease_func is None
+    if is_linear:
+        ease_func = lambda t: t
+    # 3. ターゲット座標の決定
+    target_pos_start = None 
+    target_pos_end = None   
+    try:
+        if len(target_pos_params) >= 6:
+            # モード1b: 移動注視点
+            tx1 = float(eval(target_pos_params[0]))
+            ty1 = float(eval(target_pos_params[1]))
+            tz1 = float(eval(target_pos_params[2]))
+            tx2 = float(eval(target_pos_params[3]))
+            ty2 = float(eval(target_pos_params[4]))
+            tz2 = float(eval(target_pos_params[5]))
+            target_pos_start = Pos(tx1, ty1, tz1)
+            target_pos_end = Pos(tx2, ty2, tz2)
+            self.logger.log(f'spline: [移動注視点モード] で実行。({tx1},{ty1},{tz1}) -> ({tx2},{ty2},{tz2})')
+        elif len(target_pos_params) >= 3:
+            # モード1a: 静的注視点
+            tx = float(eval(target_pos_params[0]))
+            ty = float(eval(target_pos_params[1]))
+            tz = float(eval(target_pos_params[2]))
+            target_pos_start = Pos(tx, ty, tz)
+            self.logger.log(f'spline: [静的注視点モード] で実行。注視点: ({tx}, {ty}, {tz})')
+        else:
+            # デフォルトの静的注視点を使用
+            target_pos_start = Pos(0, 1.6, 0)
+            self.logger.log(f'spline: [デフォルト注視点モード] で実行。注視点: (0, 1.6, 0)')
+    except Exception as e:
+        self.logger.log(f'! spline: ターゲット座標の解析に失敗 ({target_pos_params}): {e} !')
+        target_pos_start = Pos(0, 1.6, 0) # デフォルトにフォールバック
+        self.logger.log(f'spline: [デフォルト注視点モード] にフォールバックします。')
+    # 4. 座標データを解析
+    control_points_pos = [] 
+    control_points_fov = [] 
+    for i, point_str in enumerate(control_point_strings):
+        try:
+            parts = point_str.split('_')
+            if len(parts) >= 8:
+                px = float(parts[1])
+                py = float(parts[2])
+                pz = float(parts[3])
+                fov = float(parts[7])
+                control_points_pos.append(Pos(px, py, pz))
+                control_points_fov.append(fov)
+            else:
+                raise ValueError("q_ 形式のデータが短すぎます (8要素必要)")
+        except Exception as e:
+            self.logger.log(f'! spline: 座標 {i+1} ({point_str}) の解析に失敗: {e} !')
+            return
+    # 5. 制御点の数をチェック
+    if len(control_points_pos) < 2:
+        self.logger.log(f"! spline: 軌道には最低2点の制御点が必要です (現在 {len(control_points_pos)} 点) !")
+        return
+    num_segments = len(control_points_pos) - 1
+    # 6. 【距離基準のためのパス1】 軌道の総距離とLUTを事前計算
+    self.logger.log('spline: 軌道の総距離を事前計算中...')
+    # (FOVも同様のLUTを作成)
+    control_points_fov_pos = [Pos(f, 0, 0) for f in control_points_fov] # 1DデータをPosとして扱う
+    pos_lut, total_distance = _spline_get_arc_length_lut(control_points_pos, num_segments)
+    fov_lut, total_fov_change_pseudo = _spline_get_arc_length_lut(control_points_fov_pos, num_segments)
+    self.logger.log(f'spline: 軌道総距離: {total_distance:.2f} m')
+    # 7. アダプティブ解像度と時間分割
+    base_p = 10 
+    p = base_p
+    if not is_linear and dur > 0:
+        res_multiplier = calculate_adaptive_multiplier(ease_func, dur, dx, dy, self.logger)
+        p = base_p / res_multiplier
+        self.logger.log(f'spline p: {p} (base_p: {base_p} / mult: {res_multiplier})')
+    # (総距離に基づいて span を決定するロジックに変更可能だが、既存のロジックも機能する)
+    span = max(1/30, dur/max(36, 36 * (len(control_points_pos) / 4)))
+    spans = []
+    init_dur = dur
+    while dur > 0:
+        min_span = min(span, dur)
+        if dur - min_span < 0.01:
+            min_span = dur
+        spans.append(min_span)
+        dur -= min_span
+    span_size = len(spans)
+    init_dur = sum(spans)
+    if init_dur == 0:
+        self.logger.log('spline: 期間が0のため、最後の制御点にスナップします。')
+        endPos = control_points_pos[-1]
+        endFov = control_points_fov[-1]
+        end_target = target_pos_end if target_pos_end else target_pos_start
+        endRot = _spline_calculate_look_at(endPos, end_target)
+        self.lastTransform = Transform(endPos, endRot, endFov)
+        return
+    # 8. メインループ
+    for i in range(span_size):
+        new_line = Line(spans[i])
+        new_line.visibleDict = deepcopy(self.visibleObject.state)
+        t_end = sum(spans[:(i+1)]) / init_dur
+        if t_end > 1: t_end = 1
+        # (A) イージングされた「時間の進捗率」 (0.0 -> 1.0)
+        rate = ease_func(t_end, dx, dy) if easetype_name == 'Drift' else ease_func(t_end)
+        # 9. 【距離基準のためのパス2】 rate を「距離」に変換し、t を逆引き
+        # (位置)
+        target_distance = total_distance * rate
+        global_spline_t_pos = _spline_get_t_for_distance(pos_lut, target_distance)
+        # (FOV)
+        target_fov_change = total_fov_change_pseudo * rate
+        global_spline_t_fov = _spline_get_t_for_distance(fov_lut, target_fov_change)
+        # 10. グローバル t を「セグメント」と「ローカル t」に分解
+        # (位置)
+        segment_index_pos = min(floor(global_spline_t_pos), num_segments - 1)
+        segment_t_pos = global_spline_t_pos - segment_index_pos 
+        # (FOV)
+        segment_index_fov = min(floor(global_spline_t_fov), num_segments - 1)
+        segment_t_fov = global_spline_t_fov - segment_index_fov 
+        # 11. 補間に必要な4点を取得
+        # (位置)
+        p1_pos = control_points_pos[segment_index_pos]
+        p2_pos = control_points_pos[segment_index_pos + 1]
+        p0_pos = control_points_pos[segment_index_pos - 1] if segment_index_pos > 0 else p1_pos
+        p3_pos = control_points_pos[segment_index_pos + 2] if segment_index_pos < (num_segments - 1) else p2_pos
+        # (FOV)
+        p1_fov = control_points_fov[segment_index_fov]
+        p2_fov = control_points_fov[segment_index_fov + 1]
+        p0_fov = control_points_fov[segment_index_fov - 1] if segment_index_fov > 0 else p1_fov
+        p3_fov = control_points_fov[segment_index_fov + 2] if segment_index_fov < (num_segments - 1) else p2_fov
+        # 12. Catmull-Rom 補間を実行
+        # 位置(Pos)
+        end_px = _spline_catmull_rom_interpolate(p0_pos.x, p1_pos.x, p2_pos.x, p3_pos.x, segment_t_pos)
+        end_py = _spline_catmull_rom_interpolate(p0_pos.y, p1_pos.y, p2_pos.y, p3_pos.y, segment_t_pos)
+        end_pz = _spline_catmull_rom_interpolate(p0_pos.z, p1_pos.z, p2_pos.z, p3_pos.z, segment_t_pos)
+        endPos = Pos(end_px, end_py, end_pz)
+        # FOV (1D補間)
+        endFov = _spline_catmull_rom_interpolate(p0_fov, p1_fov, p2_fov, p3_fov, segment_t_fov)
+        # 13. 回転を計算 (注視点の計算は「時間基準」の 'rate' を使う)
+        current_target_pos = None
+        if target_pos_end is None:
+            # モード1a または デフォルト
+            current_target_pos = target_pos_start
+        else:
+            # モード1b: 移動注視点
+            tx = target_pos_start.x + (target_pos_end.x - target_pos_start.x) * rate
+            ty = target_pos_start.y + (target_pos_end.y - target_pos_start.y) * rate
+            tz = target_pos_start.z + (target_pos_end.z - target_pos_start.z) * rate
+            current_target_pos = Pos(tx, ty, tz)
+        endRot = _spline_calculate_look_at(endPos, current_target_pos)
+        # 14. new_line の設定
+        new_line.end = Transform(endPos, endRot, endFov)
+        if i == 0:
+            startPos = control_points_pos[0]
+            startFov = control_points_fov[0]
+            startRot = _spline_calculate_look_at(startPos, target_pos_start)
+            new_line.start = Transform(startPos, startRot, startFov)
+        else:
+            new_line.start = deepcopy(self.lastTransform)
+        # 15. 終点スナップ処理
+        if i == span_size - 1:
+            endPos = control_points_pos[-1]
+            endFov = control_points_fov[-1]
+            endRot = None
+            if target_pos_end is None:
+                endRot = _spline_calculate_look_at(endPos, target_pos_start)
+            else:
+                endRot = _spline_calculate_look_at(endPos, target_pos_end)
+            new_line.end = Transform(endPos, endRot, endFov)
+        self.lines.append(new_line)
+        self.lastTransform = new_line.end
+        self.logger.log(new_line.start)
 
 
 def rvib(self, dur, text, line):

@@ -1,5 +1,5 @@
 from BasicElements import Pos, Rot
-from LongCommandsUtils import rotate, vibro, script
+from LongCommandsUtils import rotate, vibro, script, spline
 from PresetCommandsUtils import generate
 from GeneralUtils import get_param
 import math
@@ -110,6 +110,12 @@ def long_command(self, text, dur) -> bool:
         self.logger.log(text)
         self.logger.log('rotate コマンドを確認')
         rotate(self, text[6:], dur) 
+        return True
+    # spline
+    if text[:6] == 'spline':
+        self.logger.log(text)
+        self.logger.log('spline コマンドを確認')
+        spline(self, text , dur) 
         return True
     # vibro
     if text[:5] == 'vibro':

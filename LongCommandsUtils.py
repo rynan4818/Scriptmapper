@@ -98,6 +98,28 @@ def _spline_get_t_for_distance(lut, target_distance):
     return lut[-1][1]
 
 
+def _spline_unwrap_angles(angles):
+    """
+    ロール(rz)の「遠回り問題」を解消するため、角度リストをアンラップする。
+    例: [350, 10, 20] -> [350, 370, 380]
+    """
+    unwrapped = []
+    if not angles:
+        return unwrapped
+    unwrapped.append(angles[0])
+    last_angle = angles[0]
+    for i in range(1, len(angles)):
+        current_angle = angles[i]
+        diff = current_angle - last_angle
+        if diff > 180:
+            current_angle -= 360 # 10 -> 350 へのジャンプを補正
+        elif diff < -180:
+            current_angle += 360 # 350 -> 10 へのジャンプを補正
+        unwrapped.append(current_angle)
+        last_angle = current_angle
+    return unwrapped
+
+
 def get_shake_value(shake_data, frame):
     if not shake_data:
         return 0
@@ -181,6 +203,7 @@ def spline(self, text, dur):
     # 4. 座標データを解析
     control_points_pos = [] 
     control_points_fov = [] 
+    control_points_roll_raw = []
     for i, point_str in enumerate(control_point_strings):
         try:
             parts = point_str.split('_')
@@ -188,9 +211,11 @@ def spline(self, text, dur):
                 px = float(parts[1])
                 py = float(parts[2])
                 pz = float(parts[3])
+                rz = float(parts[6])
                 fov = float(parts[7])
                 control_points_pos.append(Pos(px, py, pz))
                 control_points_fov.append(fov)
+                control_points_roll_raw.append(rz)
             else:
                 raise ValueError("q_ 形式のデータが短すぎます (8要素必要)")
         except Exception as e:
@@ -200,13 +225,16 @@ def spline(self, text, dur):
     if len(control_points_pos) < 2:
         self.logger.log(f"! spline: 軌道には最低2点の制御点が必要です (現在 {len(control_points_pos)} 点) !")
         return
+    control_points_roll = _spline_unwrap_angles(control_points_roll_raw)
     num_segments = len(control_points_pos) - 1
     # 6. 【距離基準のためのパス1】 軌道の総距離とLUTを事前計算
     self.logger.log('spline: 軌道の総距離を事前計算中...')
-    # (FOVも同様のLUTを作成)
-    control_points_fov_pos = [Pos(f, 0, 0) for f in control_points_fov] # 1DデータをPosとして扱う
+    # (FOVとRollも同様のLUTを作成するため、1DデータをPosとして扱う)
+    control_points_roll_pos = [Pos(r, 0, 0) for r in control_points_roll]
+    control_points_fov_pos = [Pos(f, 0, 0) for f in control_points_fov] 
     pos_lut, total_distance = _spline_get_arc_length_lut(control_points_pos, num_segments)
     fov_lut, total_fov_change_pseudo = _spline_get_arc_length_lut(control_points_fov_pos, num_segments)
+    roll_lut, total_roll_change_pseudo = _spline_get_arc_length_lut(control_points_roll_pos, num_segments)
     self.logger.log(f'spline: 軌道総距離: {total_distance:.2f} m')
     # 7. アダプティブ解像度と時間分割
     base_p = 10 
@@ -231,8 +259,10 @@ def spline(self, text, dur):
         self.logger.log('spline: 期間が0のため、最後の制御点にスナップします。')
         endPos = control_points_pos[-1]
         endFov = control_points_fov[-1]
+        endRoll = control_points_roll[-1]
         end_target = target_pos_end if target_pos_end else target_pos_start
         endRot = _spline_calculate_look_at(endPos, end_target)
+        endRot.z = endRoll
         self.lastTransform = Transform(endPos, endRot, endFov)
         return
     # 8. メインループ
@@ -250,6 +280,9 @@ def spline(self, text, dur):
         # (FOV)
         target_fov_change = total_fov_change_pseudo * rate
         global_spline_t_fov = _spline_get_t_for_distance(fov_lut, target_fov_change)
+        # (Roll)
+        target_roll_change = total_roll_change_pseudo * rate
+        global_spline_t_roll = _spline_get_t_for_distance(roll_lut, target_roll_change)
         # 10. グローバル t を「セグメント」と「ローカル t」に分解
         # (位置)
         segment_index_pos = min(floor(global_spline_t_pos), num_segments - 1)
@@ -257,6 +290,9 @@ def spline(self, text, dur):
         # (FOV)
         segment_index_fov = min(floor(global_spline_t_fov), num_segments - 1)
         segment_t_fov = global_spline_t_fov - segment_index_fov 
+        # (Roll)
+        segment_index_roll = min(floor(global_spline_t_roll), num_segments - 1)
+        segment_t_roll = global_spline_t_roll - segment_index_roll 
         # 11. 補間に必要な4点を取得
         # (位置)
         p1_pos = control_points_pos[segment_index_pos]
@@ -268,6 +304,11 @@ def spline(self, text, dur):
         p2_fov = control_points_fov[segment_index_fov + 1]
         p0_fov = control_points_fov[segment_index_fov - 1] if segment_index_fov > 0 else p1_fov
         p3_fov = control_points_fov[segment_index_fov + 2] if segment_index_fov < (num_segments - 1) else p2_fov
+        # (Roll)
+        p1_roll = control_points_roll[segment_index_roll]
+        p2_roll = control_points_roll[segment_index_roll + 1]
+        p0_roll = control_points_roll[segment_index_roll - 1] if segment_index_roll > 0 else p1_roll
+        p3_roll = control_points_roll[segment_index_roll + 2] if segment_index_roll < (num_segments - 1) else p2_roll
         # 12. Catmull-Rom 補間を実行
         # 位置(Pos)
         end_px = _spline_catmull_rom_interpolate(p0_pos.x, p1_pos.x, p2_pos.x, p3_pos.x, segment_t_pos)
@@ -276,6 +317,8 @@ def spline(self, text, dur):
         endPos = Pos(end_px, end_py, end_pz)
         # FOV (1D補間)
         endFov = _spline_catmull_rom_interpolate(p0_fov, p1_fov, p2_fov, p3_fov, segment_t_fov)
+        # Roll (1D補間)
+        endRoll = _spline_catmull_rom_interpolate(p0_roll, p1_roll, p2_roll, p3_roll, segment_t_roll)
         # 13. 回転を計算 (注視点の計算は「時間基準」の 'rate' を使う)
         current_target_pos = None
         if target_pos_end is None:
@@ -288,12 +331,15 @@ def spline(self, text, dur):
             tz = target_pos_start.z + (target_pos_end.z - target_pos_start.z) * rate
             current_target_pos = Pos(tx, ty, tz)
         endRot = _spline_calculate_look_at(endPos, current_target_pos)
+        endRot.z = endRoll
         # 14. new_line の設定
         new_line.end = Transform(endPos, endRot, endFov)
         if i == 0:
             startPos = control_points_pos[0]
             startFov = control_points_fov[0]
+            startRoll = control_points_roll[0]
             startRot = _spline_calculate_look_at(startPos, target_pos_start)
+            startRot.z = startRoll
             new_line.start = Transform(startPos, startRot, startFov)
         else:
             new_line.start = deepcopy(self.lastTransform)
@@ -301,11 +347,13 @@ def spline(self, text, dur):
         if i == span_size - 1:
             endPos = control_points_pos[-1]
             endFov = control_points_fov[-1]
+            endRoll = control_points_roll[-1]
             endRot = None
             if target_pos_end is None:
                 endRot = _spline_calculate_look_at(endPos, target_pos_start)
             else:
                 endRot = _spline_calculate_look_at(endPos, target_pos_end)
+            endRot.z = endRoll
             new_line.end = Transform(endPos, endRot, endFov)
         self.lines.append(new_line)
         self.lastTransform = new_line.end

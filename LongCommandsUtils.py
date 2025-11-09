@@ -243,8 +243,7 @@ def spline(self, text, dur):
         res_multiplier = calculate_adaptive_multiplier(ease_func, dur, dx, dy, self.logger)
         p = base_p / res_multiplier
         self.logger.log(f'spline p: {p} (base_p: {base_p} / mult: {res_multiplier})')
-    # (総距離に基づいて span を決定するロジックに変更可能だが、既存のロジックも機能する)
-    span = max(1/30, dur/max(36, 36 * (len(control_points_pos) / 4)))
+    span = 1 / 30
     spans = []
     init_dur = dur
     while dur > 0:
@@ -405,7 +404,7 @@ def rvib(self, dur, text, line):
     iFOV = line.start.fov
     lFOV = line.end.fov
     spans = []
-    span = 1 / 60
+    span = 1 / 30
     temp_dur = dur
     while temp_dur > 0:
         min_span = min(span, temp_dur)

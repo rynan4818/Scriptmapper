@@ -44,6 +44,10 @@ class ScriptMapper:
         self.lines = []
         self.lastTransform = Transform()
         self.lastLine = None
+        # spline data storage
+        self.last_spline_points = []     # 前回の制御点リスト (Pos)
+        self.last_spline_fov = []        # 前回のFOVリスト
+        self.last_spline_roll = []       # 前回のRollリスト
         # output
         self.output = None
 
@@ -394,23 +398,27 @@ class ScriptMapper:
             sum_time += b.duration
 
     def parse_bookmarks(self):
-        cnt = 0
         sum_time = 0
-        for b in self.copied_b:
+        for i, b in enumerate(self.copied_b):
             if b.text[0] == '#':
                 self.logger.log('\n環境コマンドを検出')
                 env_command(self, b.text[1:])
                 continue
-            cnt += 1
             text = b.text
             dur = b.duration
-            self.logger.log(f'\n{cnt}番目のスクリプトを確認中...')
+            self.logger.log(f'\n{i+1}番目のスクリプトを確認中...')
             self.logger.log(text)
             self.logger.log(f'grid : {b.grid:6.2f} ({format_time(sum_time)})')
             self.logger.log(f'duration : {dur:.2f}')
             sum_time += dur
+            # --- 次のコマンド情報を取得 (Look-Ahead, Sync用) ---
+            next_text = None
+            next_dur = None
+            if i < len(self.copied_b) - 1:
+                next_text = self.copied_b[i+1].text
+                next_dur = self.copied_b[i+1].duration
             # if long command -> process -> skip
-            if long_command(self, text, dur):
+            if long_command(self, text, dur, next_text, next_dur):
                 continue
             # normal command
             parse = text.split(',')
@@ -432,7 +440,7 @@ class ScriptMapper:
             # start
             start_command = parse[0]
             self.logger.log(f'start : {start_command}')
-            parse_command(self, new_line.start, start_command)
+            parse_command(self, new_line.start, start_command, next_text)
             self.lastTransform = new_line.start
             # end
             end_command = parse[1]
@@ -443,7 +451,7 @@ class ScriptMapper:
                 self.logger.log('全スクリプトを変換後再計算するため、下のログには仮パラメータが出力されます。')
             else:
                 self.logger.log(f'end : {end_command}')
-                parse_command(self, new_line.end, end_command)
+                parse_command(self, new_line.end, end_command, next_text)
                 self.lastTransform = new_line.end
             # transition
             transition_command = parse[2]

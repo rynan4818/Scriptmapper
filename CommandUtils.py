@@ -104,7 +104,7 @@ def orig_command(self, key, transform):
     transform.rot = rot
 
 
-def long_command(self, text, dur) -> bool:
+def long_command(self, text, dur, next_text=None, next_dur=None) -> bool:
     # rotate
     if text[:6] == 'rotate':
         self.logger.log(text)
@@ -115,7 +115,7 @@ def long_command(self, text, dur) -> bool:
     if text[:6] == 'spline':
         self.logger.log(text)
         self.logger.log('spline コマンドを確認')
-        spline(self, text , dur) 
+        spline(self, text, dur, next_text, next_dur) 
         return True
     # vibro
     if text[:5] == 'vibro':
@@ -133,7 +133,7 @@ def long_command(self, text, dur) -> bool:
     return False
 
 
-def parse_command(self, transform, text) -> None:
+def parse_command(self, transform, text, next_text=None) -> None:
     # orig_check
     for key in self.manual.keys():
         if text == key:

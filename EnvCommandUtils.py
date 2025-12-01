@@ -50,6 +50,15 @@ def env_command(self, text) -> None:
         self.logger.log(f'offset コマンドを検出。次のコマンドのオフセット期間を {param} 秒短縮します。')
         self.offset = param
         return
+    if text[:8] == 'dummyend':
+        param = text[8:].strip().upper()
+        if param == 'OFF':
+            self.enable_dummy_end = False
+            self.logger.log('dummyend を OFF にします。最後のブックマークは出力されません。')
+        else:
+            self.enable_dummy_end = True
+            self.logger.log('dummyend を ON にします。')
+        return
     visibleObjects = ['avatar', 'ui', 'wallFrame',
                       'wall', 'saber', 'notes', 'debris']
     for visibleObject in visibleObjects:

@@ -35,6 +35,7 @@ class ScriptMapper:
         self.turnToHeadHorizontal = False
         self.visibleObject = VisibleObject()
         self.offset = 0
+        self.enable_dummy_end = True # ダミーエンド有効フラグ
         # bookmarks
         self.dummyend_grid = 0
         self.raw_b = []
@@ -308,9 +309,22 @@ class ScriptMapper:
                 dummyend_grid = max(
                     dummyend_grid, bookmarks[-1]['beat'] + 100) # V4
 
-        bookmarks.append({'_time': dummyend_grid, '_name': 'dummyend'})
-        self.dummyend_grid = dummyend_grid
-        self.logger.log(f'ダミーエンドをグリッド {dummyend_grid} に設定。')
+        for b in bookmarks:
+            # V2/V3/V4のキーに対応
+            b_text = b.get('_name', b.get('n', b.get('text', '')))
+            if b_text and str(b_text).startswith('#dummyend'):
+                param = str(b_text)[9:].strip().upper()
+                if param == 'OFF':
+                    self.enable_dummy_end = False
+                    self.logger.log('プリスキャン: dummyend を OFF にします。')
+                else:
+                    self.enable_dummy_end = True
+        if self.enable_dummy_end:
+            bookmarks.append({'_time': dummyend_grid, '_name': 'dummyend'})
+            self.dummyend_grid = dummyend_grid
+            self.logger.log(f'ダミーエンドをグリッド {dummyend_grid} に設定。')
+        else:
+            self.logger.log('ダミーエンドは無効化されています。')
         for b in bookmarks:
             raw_process(self, b)
 
@@ -318,13 +332,21 @@ class ScriptMapper:
         size = len(self.raw_b)
         for i in range(size-1):
             fill_process(self, i)
-        self.filled_b.append(Bookmark(self.dummyend_grid, 'stop'))
+        if self.enable_dummy_end:
+            self.filled_b.append(Bookmark(self.dummyend_grid, 'stop'))
+        else:
+            if size > 0:
+                self.filled_b.append(self.raw_b[-1])
 
     def make_copied_b(self):
         size = len(self.filled_b)
         for i in range(size-1):
             copy_process(self, i)
-        self.copied_b.append(Bookmark(self.dummyend_grid, 'stop'))
+        if self.enable_dummy_end:
+            self.copied_b.append(Bookmark(self.dummyend_grid, 'stop'))
+        else:
+            if size > 0:
+                self.copied_b.append(self.filled_b[-1])
 
     def calc_duration(self):
         command_b = []
@@ -539,6 +561,9 @@ class ScriptMapper:
         lines_count = len(self.lines)
         for i in range(lines_count):
             line = self.lines[i]
+            if not self.enable_dummy_end and i == lines_count - 1:
+                self.logger.log('dummyend off のため、最後のMovementを出力せずに終了します。')
+                continue
             if i < lines_count - 1 and line.duration < 0.01:
                 duration_error += line.duration
                 total_duration_error += line.duration

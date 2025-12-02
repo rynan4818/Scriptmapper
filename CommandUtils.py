@@ -1,5 +1,6 @@
 from BasicElements import Pos, Rot
-from LongCommandsUtils import rotate, vibro, script, spline
+from LongCommandsUtils import rotate, vibro, script
+from SplineUtils import spline
 from PresetCommandsUtils import generate
 from GeneralUtils import get_param
 import math

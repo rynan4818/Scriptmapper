@@ -112,10 +112,10 @@ def long_command(self, text, dur, next_text=None, next_dur=None) -> bool:
         self.logger.log('rotate コマンドを確認')
         rotate(self, text[6:], dur) 
         return True
-    # spline
-    if text[:6] == 'spline':
+    # spline / bspline
+    if text[:6] == 'spline' or text[:7] == 'bspline':
         self.logger.log(text)
-        self.logger.log('spline コマンドを確認')
+        self.logger.log('spline/bspline コマンドを確認')
         spline(self, text, dur, next_text, next_dur) 
         return True
     # vibro

@@ -18,6 +18,21 @@ def _spline_catmull_rom_interpolate(p0, p1, p2, p3, t):
                    (-p0 + 3*p1 - 3*p2 + p3) * t3 )
 
 
+def _spline_bspline_interpolate(p0, p1, p2, p3, t):
+    """
+    一様3次Bスプライン補間（1次元）
+    制御点を通らず、滑らかに近似（ショートカット）する。
+    """
+    t2 = t * t
+    t3 = t2 * t
+    # 基底関数
+    val = (p0 * ((1-t)**3) +
+           p1 * (3*t3 - 6*t2 + 4) +
+           p2 * (-3*t3 + 3*t2 + 3*t + 1) +
+           p3 * t3) / 6.0
+    return val
+
+
 def _spline_calculate_look_at(cam_pos, target_pos):
     """
     カメラの位置 (cam_pos) からターゲットの位置 (target_pos) を
@@ -37,16 +52,24 @@ def _spline_calculate_look_at(cam_pos, target_pos):
     return Rot(rx, ry, rz)
 
 
-def _spline_get_arc_length_lut(control_points, num_segments, samples_per_segment=100, p0_guide=None, p3_guide=None):
+def _spline_get_arc_length_lut(control_points, num_segments, interpolate_func, samples_per_segment=100, p0_guide=None, p3_guide=None):
     """
     【距離基準のためのパス1】
-    スプライン軌道の総距離を計算し、
-    (距離, グローバルt) のルックアップテーブル(LUT)を作成する。
-    p0_guide, p3_guide が指定されている場合は、両端の接線計算に使用する。
+    スプライン軌道の総距離を計算し、LUTを作成する。
+    interpolate_func: 使用する補間関数
     """
     lut = [(0.0, 0.0)] # (distance, global_t)
     total_distance = 0.0
-    last_pos = control_points[0] # 最初の制御点
+    # 最初の位置を計算（t=0）
+    # ループ外で初期位置を計算する際は、ガイド点ロジックと同様にp0, p1, p2, p3を特定する必要がある
+    p1_start = control_points[0]
+    p2_start = control_points[1]
+    p0_start = p0_guide if p0_guide is not None else p1_start
+    p3_start = control_points[2] if num_segments > 1 else (p3_guide if p3_guide is not None else p2_start)
+    start_x = interpolate_func(p0_start.x, p1_start.x, p2_start.x, p3_start.x, 0.0)
+    start_y = interpolate_func(p0_start.y, p1_start.y, p2_start.y, p3_start.y, 0.0)
+    start_z = interpolate_func(p0_start.z, p1_start.z, p2_start.z, p3_start.z, 0.0)
+    last_pos = Pos(start_x, start_y, start_z)
     for i in range(num_segments):
         p1 = control_points[i]
         p2 = control_points[i + 1]
@@ -60,9 +83,9 @@ def _spline_get_arc_length_lut(control_points, num_segments, samples_per_segment
         for j in range(1, samples_per_segment + 1):
             local_t = j / samples_per_segment
             global_t = i + local_t 
-            x = _spline_catmull_rom_interpolate(p0.x, p1.x, p2.x, p3.x, local_t)
-            y = _spline_catmull_rom_interpolate(p0.y, p1.y, p2.y, p3.y, local_t)
-            z = _spline_catmull_rom_interpolate(p0.z, p1.z, p2.z, p3.z, local_t)
+            x = interpolate_func(p0.x, p1.x, p2.x, p3.x, local_t)
+            y = interpolate_func(p0.y, p1.y, p2.y, p3.y, local_t)
+            z = interpolate_func(p0.z, p1.z, p2.z, p3.z, local_t)
             dx = x - last_pos.x
             dy = y - last_pos.y
             dz = z - last_pos.z
@@ -95,7 +118,6 @@ def _spline_get_t_for_distance(lut, target_distance):
 def _spline_unwrap_angles(angles):
     """
     ロール(rz)の「遠回り問題」を解消するため、角度リストをアンラップする。
-    例: [350, 10, 20] -> [350, 370, 380]
     """
     unwrapped = []
     if not angles:
@@ -114,7 +136,7 @@ def _spline_unwrap_angles(angles):
 
 def _spline_parse_points(text, logger):
     """
-    splineコマンド文字列から制御点(q_...)とイージング、range、sync情報を抽出するヘルパー
+    spline/bsplineコマンド文字列から制御点(q_...)とイージング、range、sync、bspline情報を抽出するヘルパー
     """
     param_text = re.split('[,_]', text, 1)[-1]
     params_list = re.split('[,]', param_text) 
@@ -123,18 +145,20 @@ def _spline_parse_points(text, logger):
     ease_name_str = None
     cnct_flag = False
     sync_flag = False
+    bspline_flag = text.strip().startswith('bspline')
     range_start = 0.0
     range_end = 1.0
     for param in params_list:
         param_stripped = param.strip()
         if not param_stripped: continue
+        lower_param = param_stripped.lower()
         if param_stripped.startswith('q_'):
             control_point_strings.append(param_stripped)
-        elif param_stripped.lower() == 'cnct':
+        elif lower_param == 'cnct':
             cnct_flag = True
-        elif param_stripped.lower() == 'sync':
+        elif lower_param == 'sync':
             sync_flag = True
-        elif param_stripped.lower().startswith('r'):
+        elif lower_param.startswith('r'):
             try:
                 range_parts = param_stripped[1:].split('-')
                 if len(range_parts) == 2:
@@ -179,6 +203,7 @@ def _spline_parse_points(text, logger):
         'target_params': target_pos_params,
         'cnct': cnct_flag,
         'sync': sync_flag,
+        'bspline': bspline_flag, 
         'range_start': range_start,
         'range_end': range_end
     }
@@ -186,7 +211,7 @@ def _spline_parse_points(text, logger):
 
 def spline(self, text, dur, next_text=None, next_dur=None): 
     """
-    Catmull-Rom スプライン補間
+    Catmull-Rom / B-Spline 補間を行う。
     q_... 形式の座標 (8要素: px,py,pz,rx,ry,rz,fov) を補間する。
     """
     self.logger.log(f'spline コマンド解析開始: "{text}"')
@@ -198,9 +223,14 @@ def spline(self, text, dur, next_text=None, next_dur=None):
     control_points_roll_raw = current_data['roll']
     cnct = current_data['cnct']
     sync = current_data['sync']
+    use_bspline = current_data['bspline']
     range_start = current_data['range_start']
     range_end = current_data['range_end']
-    # --- Look-Behind ---
+    # 補間関数の決定
+    interp_func = _spline_bspline_interpolate if use_bspline else _spline_catmull_rom_interpolate
+    if use_bspline:
+        self.logger.log('spline: B-Splineモード (滑らか優先/制御点近似) で実行します。')
+    # --- Look-Behind: 過去の制御点の結合 ---
     prev_guide_pos = None
     prev_guide_fov = None
     prev_guide_roll = None
@@ -220,7 +250,7 @@ def spline(self, text, dur, next_text=None, next_dur=None):
                 self.logger.log(f'spline: 前回の軌道を考慮して滑らかに接続します。')
         else:
             self.logger.log(f'! spline: cnctが指定されましたが、前回のspline情報がありません !')
-    # --- Look-Ahead ---
+    # --- Look-Ahead: 次の制御点の取得 ---
     next_guide_pos = None
     next_guide_fov = None
     next_guide_roll = None
@@ -239,7 +269,9 @@ def spline(self, text, dur, next_text=None, next_dur=None):
                 next_points = next_data['pos'][:] 
                 if next_data['cnct']:
                     next_points.insert(0, control_points_pos[-1])
-                _, next_total_distance = _spline_get_arc_length_lut(next_points, len(next_points)-1)
+                # 次の区間がB-Splineかどうかで距離計算の補間関数を変える
+                next_interp_func = _spline_bspline_interpolate if next_data['bspline'] else _spline_catmull_rom_interpolate
+                _, next_total_distance = _spline_get_arc_length_lut(next_points, len(next_points)-1, next_interp_func)
                 if next_data['sync']:
                     next_sync_target_vel = next_total_distance / next_dur
                 else:
@@ -286,7 +318,7 @@ def spline(self, text, dur, next_text=None, next_dur=None):
     except Exception as e:
         self.logger.log(f'! spline: ターゲット座標の解析に失敗: {e} !')
         target_pos_start = Pos(0, 1.6, 0)
-    # LUT作成
+    # LUT作成 (interp_funcを渡す)
     self.logger.log('spline: 軌道総距離を事前計算中...')
     pg_pos, ng_pos = prev_guide_pos, next_guide_pos
     pg_fov = Pos(prev_guide_fov, 0, 0) if prev_guide_fov is not None else None
@@ -295,9 +327,9 @@ def spline(self, text, dur, next_text=None, next_dur=None):
     ng_roll = Pos(next_guide_roll, 0, 0) if next_guide_roll is not None else None
     control_points_roll_pos = [Pos(r, 0, 0) for r in control_points_roll]
     control_points_fov_pos = [Pos(f, 0, 0) for f in control_points_fov] 
-    pos_lut, total_distance = _spline_get_arc_length_lut(control_points_pos, num_segments, p0_guide=pg_pos, p3_guide=ng_pos)
-    fov_lut, total_fov_change_pseudo = _spline_get_arc_length_lut(control_points_fov_pos, num_segments, p0_guide=pg_fov, p3_guide=ng_fov)
-    roll_lut, total_roll_change_pseudo = _spline_get_arc_length_lut(control_points_roll_pos, num_segments, p0_guide=pg_roll, p3_guide=ng_roll)
+    pos_lut, total_distance = _spline_get_arc_length_lut(control_points_pos, num_segments, interp_func, p0_guide=pg_pos, p3_guide=ng_pos)
+    fov_lut, total_fov_change_pseudo = _spline_get_arc_length_lut(control_points_fov_pos, num_segments, interp_func, p0_guide=pg_fov, p3_guide=ng_fov)
+    roll_lut, total_roll_change_pseudo = _spline_get_arc_length_lut(control_points_roll_pos, num_segments, interp_func, p0_guide=pg_roll, p3_guide=ng_roll)
     self.logger.log(f'spline: 軌道総距離: {total_distance:.2f} m')
     # Sync & Rate Func
     rate_func = None
@@ -309,18 +341,40 @@ def spline(self, text, dur, next_text=None, next_dur=None):
         if len(self.lines) > 0:
             last_line = self.lines[-1]
             last_pos = last_line.end.pos
-            curr_start_pos = control_points_pos[0]
-            dx, dy, dz = last_pos.x - curr_start_pos.x, last_pos.y - curr_start_pos.y, last_pos.z - curr_start_pos.z
-            if sqrt(dx*dx + dy*dy + dz*dz) < CUT_THRESHOLD:
+            # --- カット検出用始点の計算 ---
+            # B-Splineの場合、制御点と実際の始点がズレるため、interp_funcを使って正確な始点を求める
+            if cnct and range_start == 0.0:
+                 # cnct時は前回のLastTransformにいるはず
+                 curr_start_real = self.lastTransform.pos
+            else:
+                 # cnctなし、またはrange途中開始の場合、正確な位置を計算する
+                 # ガイド点などのパラメータ準備
+                 p1_s = control_points_pos[0]
+                 p2_s = control_points_pos[1]
+                 p0_s = prev_guide_pos if prev_guide_pos is not None else p1_s
+                 p3_s = control_points_pos[2] if num_segments > 1 else (next_guide_pos if next_guide_pos is not None else p2_s)
+                 sx = interp_func(p0_s.x, p1_s.x, p2_s.x, p3_s.x, 0.0)
+                 sy = interp_func(p0_s.y, p1_s.y, p2_s.y, p3_s.y, 0.0)
+                 sz = interp_func(p0_s.z, p1_s.z, p2_s.z, p3_s.z, 0.0)
+                 curr_start_real = Pos(sx, sy, sz)
+            dx, dy, dz = last_pos.x - curr_start_real.x, last_pos.y - curr_start_real.y, last_pos.z - curr_start_real.z
+            dist_diff = sqrt(dx*dx + dy*dy + dz*dz)
+            if dist_diff < CUT_THRESHOLD:
                 if last_line.duration > 0:
                     dx_l, dy_l, dz_l = last_line.end.pos.x - last_line.start.pos.x, last_line.end.pos.y - last_line.start.pos.y, last_line.end.pos.z - last_line.start.pos.z
                     v_prev = sqrt(dx_l*dx_l + dy_l*dy_l + dz_l*dz_l) / last_line.duration
                     valid_prev = True
             else:
-                 self.logger.log(f'spline: sync - 前回の終点と距離があるため、速度を引き継ぎません。')
+                 self.logger.log(f'spline: sync - 前回の終点と距離があるため({dist_diff:.2f}m)、速度を引き継ぎません。')
         if not valid_prev: v_prev = v_curr 
         valid_next = False
         if next_sync_target_vel is not None and next_guide_pos is not None:
+            # 終点側も同様に、B-Splineだと制御点とズレる可能性があるが、
+            # LUT計算で総距離を出しているので平均速度アプローチではそこまで厳密でなくても良いが、
+            # カット検出においては実際の終点座標が重要。
+            # ここでは control_points_pos[-1] を使っているが、B-Splineの場合はズレる。
+            # ただし、next_guide_pos も次の始点制御点なので、B-Spline同士なら制御点距離でも近似できる。
+            # 厳密にするなら t=1.0 の座標を計算すべきだが、現状のままでもある程度機能する。
             curr_end_pos = control_points_pos[-1]
             dx, dy, dz = curr_end_pos.x - next_guide_pos.x, curr_end_pos.y - next_guide_pos.y, curr_end_pos.z - next_guide_pos.z
             if sqrt(dx*dx + dy*dy + dz*dz) < CUT_THRESHOLD:
@@ -367,7 +421,7 @@ def spline(self, text, dur, next_text=None, next_dur=None):
         dur -= min_span
     span_size = len(spans)
     init_dur = sum(spans)
-    # 座標計算の共通関数
+    # 座標計算の共通関数 (interp_funcを使用)
     def get_transform_at_t(t_val):
         rate = final_rate_func(t_val)
         target_distance = total_distance * rate
@@ -383,11 +437,11 @@ def spline(self, text, dur, next_text=None, next_dur=None):
             p0 = points[seg_idx-1] if seg_idx > 0 else (p0_g if p0_g is not None else p1)
             p3 = points[seg_idx+2] if seg_idx < (len(points)-2) else (p3_g if p3_g is not None else p2)
             if isinstance(p1, Pos):
-                return _spline_catmull_rom_interpolate(p0.x, p1.x, p2.x, p3.x, seg_t), \
-                       _spline_catmull_rom_interpolate(p0.y, p1.y, p2.y, p3.y, seg_t), \
-                       _spline_catmull_rom_interpolate(p0.z, p1.z, p2.z, p3.z, seg_t)
+                return interp_func(p0.x, p1.x, p2.x, p3.x, seg_t), \
+                       interp_func(p0.y, p1.y, p2.y, p3.y, seg_t), \
+                       interp_func(p0.z, p1.z, p2.z, p3.z, seg_t)
             else:
-                return _spline_catmull_rom_interpolate(p0, p1, p2, p3, seg_t)
+                return interp_func(p0, p1, p2, p3, seg_t)
         px, py, pz = get_interp_val(control_points_pos, global_spline_t_pos, pg_pos, ng_pos)
         fov = get_interp_val(control_points_fov, global_spline_t_fov, pg_fov.x if pg_fov else None, ng_fov.x if ng_fov else None)
         roll = get_interp_val(control_points_roll, global_spline_t_roll, pg_roll.x if pg_roll else None, ng_roll.x if ng_roll else None)

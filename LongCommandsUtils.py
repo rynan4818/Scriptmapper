@@ -2,7 +2,6 @@ import os
 import json
 import re
 
-from random import random
 from math import atan2, pi, sin, cos, degrees, sqrt
 from copy import deepcopy
 from BasicElements import Pos, Rot, Line, Transform
@@ -401,16 +400,16 @@ def vibro(self, dur, param):
     while dur > 0:
         steps.append(min(span, dur))
         dur -= span
-        span *= (0.9 + random()*0.2)
+        span *= (0.9 + self.compat.random()*0.2)
     ans = []
     for step in steps:
         new_line = Line(step)
         new_line.visibleDict = deepcopy(self.visibleObject.state)
         new_line.start = deepcopy(self.lastTransform)
         new_line.end = deepcopy(self.lastTransform)
-        dx = round(random()/6, 3)-1/12
-        dy = round(random()/6, 3)-1/12
-        dz = round(random()/6, 3)-1/12
+        dx = round(self.compat.random()/6, 3)-1/12
+        dy = round(self.compat.random()/6, 3)-1/12
+        dz = round(self.compat.random()/6, 3)-1/12
         new_line.end.pos.x += dx
         new_line.end.pos.y += dy
         new_line.end.pos.z += dz
@@ -500,9 +499,9 @@ def vib(self, dur, text, line):
         delta_rate = rate_end - last_rate
         speed_multiplier = delta_rate / delta_t if delta_t > 1e-6 else 0
         last_rate = rate_end
-        dx_r = (round(random()/6, 3)-1/12) * speed_multiplier
-        dy_r = (round(random()/6, 3)-1/12) * speed_multiplier
-        dz_r = (round(random()/6, 3)-1/12) * speed_multiplier
+        dx_r = (round(self.compat.random()/6, 3)-1/12) * speed_multiplier
+        dy_r = (round(self.compat.random()/6, 3)-1/12) * speed_multiplier
+        dz_r = (round(self.compat.random()/6, 3)-1/12) * speed_multiplier
         px2 = ixp + (lxp-ixp) * rate_end
         py2 = iyp + (lyp-iyp) * rate_end
         pz2 = izp + (lzp-izp) * rate_end

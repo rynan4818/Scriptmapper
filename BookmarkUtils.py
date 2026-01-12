@@ -1,5 +1,4 @@
 from BasicElements import Bookmark
-from random import random
 
 
 def raw_process(self, b):
@@ -57,7 +56,7 @@ def fill_process(self, i):
         while current_grid < end_grid:
             # "!"と'?'を変数に
             text_pattern = orig_text_pattern.replace('!', str(cnt))
-            text_pattern = text_pattern.replace('?', str(random()))
+            text_pattern = text_pattern.replace('?', str(self.compat.random()))
             cnt += 1
             self.filled_b.append(Bookmark(current_grid, text_pattern))
             self.logger.log(f'{current_grid} : {text_pattern}')

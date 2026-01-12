@@ -1,4 +1,3 @@
-from random import random
 from math import degrees, pi, sin, cos, atan2, sqrt, radians
 from BasicElements import Transform, Pos, Rot
 from copy import deepcopy
@@ -10,19 +9,19 @@ def generate(self, text, r) -> Transform:
     if text == 'random':
         last_theta_deg = self.lastTransform.rot.y
         while True:
-            theta = random()*2*pi
+            theta = self.compat.random()*2*pi
             theta_deg = -degrees(theta) + 270
             if abs(theta_deg-last_theta_deg) >= 60:
                 break
         while True:
-            phi = random()/2*pi - pi / 6
+            phi = self.compat.random()/2*pi - pi / 6
             if r*sin(phi)+self.height >= 0:
                 break
         pos = Pos(round(r*cos(phi)*cos(theta), 1),
                   round(r*sin(phi)+self.height, 1),
                   round(r*cos(phi)*sin(theta), 1)
                   )
-        spin = random()*20-10
+        spin = self.compat.random()*20-10
         rot = Rot(int(degrees(phi)),
                   -int(degrees(theta))+270,
                   spin)

@@ -5,12 +5,11 @@ import json
 import pathlib
 import shutil
 import datetime
-from random import seed
 from math import ceil
 from collections import OrderedDict
 
 from BasicElements import Bookmark, Line, Transform, Logger, VisibleObject, Pos, Rot
-from GeneralUtils import format_time, manual_process
+from GeneralUtils import format_time, manual_process, CompatRandom
 from BookmarkUtils import copy_process, fill_process, raw_process
 from CommandUtils import long_command, parse_command
 from EnvCommandUtils import env_command
@@ -29,8 +28,8 @@ class ScriptMapper:
         self.bpm = 0
         self.bpmchanges = []
         self.fov = 60
-        self.seed = seed
-        self.seed(0)
+        self.compat = CompatRandom(0)
+        self.seed = self.compat.seed
         self.height = 1.5
         self.turnToHead = False
         self.turnToHeadHorizontal = False

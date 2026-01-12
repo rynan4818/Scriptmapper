@@ -524,7 +524,7 @@ def vib(self, dur, text, line):
 
 def script(self, text, dur):
     path_dir = self.path_obj.parent
-    script_dir = os.path.join(path_dir, 'script')
+    script_dir = os.path.join(str(path_dir), 'script')
     if not os.path.exists(script_dir):
         self.logger.log('! script フォルダが見つかりません。プログラムを終了します !')
         input()
@@ -535,8 +535,9 @@ def script(self, text, dur):
         self.logger.log(f'! {script_file} が見つかりません。プログラムを終了します !')
         input()
         exit()
-    f = open(script_path, 'rb')
+    f = open(script_path, 'r', encoding='utf-8')
     j = json.load(f)
+    f.close()
     if 'Movements' in j:
         sum_dur = 0
         movements = j['Movements']

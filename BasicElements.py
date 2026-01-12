@@ -1,6 +1,7 @@
 import os
 from datetime import datetime
 from math import degrees, sqrt, atan2
+from collections import OrderedDict
 
 
 class Bookmark:
@@ -16,18 +17,19 @@ class Bookmark:
 class VisibleObject:
 
     def __init__(self):
-        self.state = {
-            'avatar': True,
-            'ui': True,
-            'wall': True,
-            'wallFrame': True,
-            'saber': True,
-            'notes': True,
-            'debris': True,
-        }
+        self.state = OrderedDict([
+            ('avatar', True),
+            ('ui', True),
+            ('wall', True),
+            ('wallFrame', True),
+            ('saber', True),
+            ('notes', True),
+            ('debris', True),
+        ])
 
     def __str__(self) -> str:
-        return(str(self.state))
+        items = [f"'{k}': {v}" for k, v in self.state.items()]
+        return "{" + ", ".join(items) + "}"
 
 
 class Pos:
@@ -123,10 +125,12 @@ class Logger:
         self.log_path = log_path
         f = open(log_path, 'w', encoding='utf-8')
         f.write(f"logfile at {now}\n\n")
-
+        f.close()
+  
     def log(self, *args):
         str_args = [str(a) for a in args]
         text = ' '.join(str_args)
         print(text)
         f = open(self.log_path, 'a', encoding='utf-8')
         f.write(text+'\n')
+        f.close()

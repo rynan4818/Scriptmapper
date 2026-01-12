@@ -7,6 +7,7 @@ import shutil
 import datetime
 from random import seed
 from math import ceil
+from collections import OrderedDict
 
 from BasicElements import Bookmark, Line, Transform, Logger, VisibleObject, Pos, Rot
 from GeneralUtils import format_time, manual_process
@@ -56,7 +57,7 @@ class ScriptMapper:
         self.file_path = file_path
         self.path_obj = pathlib.Path(file_path)
         path_dir = self.path_obj.parent
-        logger = Logger(path_dir)
+        logger = Logger(str(path_dir))
         self.logger = logger
 
     def confirm_WIP(self):
@@ -69,14 +70,15 @@ class ScriptMapper:
 
     def check_bpm(self):
         path_dir = self.path_obj.parent
-        info_path = os.path.join(path_dir, 'info.dat')
+        info_path = os.path.join(str(path_dir), 'info.dat')
         if not os.path.exists(info_path):
             self.logger.log('info.dat が見つかりません。プログラムを終了します。')
             input()
             exit()
         
-        f_info = open(info_path, 'rb')
+        f_info = open(info_path, 'r', encoding='utf-8')
         j_info = json.load(f_info)
+        f_info.close()
         
         bpm = 0
         if '_beatsPerMinute' in j_info:
@@ -87,15 +89,15 @@ class ScriptMapper:
             self.logger.log('V4形式のデフォルトBPMを検出')
         else:
             self.logger.log('info.dat にBPM情報が見つかりません。プログラムを終了します。')
-            f_info.close()
             input()
             exit()
 
         self.bpm = bpm
         self.logger.log(f'デフォルトbpmを計測 {self.bpm} \n')
 
-        f_beatmap = open(self.file_path, 'rb')
+        f_beatmap = open(self.file_path, 'r', encoding='utf-8')
         j = json.load(f_beatmap)
+        f_beatmap.close()
 
         if '_events' in j:
             bpmChanges = j['_events'] # V2.5
@@ -109,8 +111,6 @@ class ScriptMapper:
                         'bpm': b['_floatValue']})
         if self.bpmchanges != []:
             self.logger.log('')
-            f_info.close()
-            f_beatmap.close()
             return
             
         if '_customData' in j:
@@ -126,8 +126,6 @@ class ScriptMapper:
                         'bpm': b['_BPM'],
                         'perbar': b['_beatsPerBar']})
                 self.logger.log('')
-                f_info.close()
-                f_beatmap.close()
                 return
 
         if 'bpmEvents' in j:
@@ -139,8 +137,6 @@ class ScriptMapper:
                     'grid': b['b'],
                     'bpm': b['m']})
             self.logger.log('')
-            f_info.close()
-            f_beatmap.close()
             return
 
         self.logger.log('V2/V3系BPM変更が見つかりません。V4 (AudioData.dat) をチェックします。\n')
@@ -151,13 +147,14 @@ class ScriptMapper:
         
         audio_data_path = None
         if audio_data_filename:
-            audio_data_path = os.path.join(path_dir, audio_data_filename)
+            audio_data_path = os.path.join(str(path_dir), audio_data_filename)
 
         if audio_data_path and os.path.exists(audio_data_path):
             self.logger.log(f'バージョン検出：V4 (AudioData.dat を検出)\n')
             try:
                 f_audio = open(audio_data_path, 'r', encoding='utf-8')
                 j_audio = json.load(f_audio)
+                f_audio.close()
                 
                 song_freq = j_audio['songFrequency']
                 bpm_data = j_audio['bpmData']
@@ -193,7 +190,6 @@ class ScriptMapper:
                         'bpm': segment_bpm
                     })
                 
-                f_audio.close()
                 self.logger.log('')
 
             except Exception as e:
@@ -203,23 +199,23 @@ class ScriptMapper:
         else:
             self.logger.log('BPM変更は見つかりませんでした。\n')
 
-        f_info.close()
-        f_beatmap.close()
-
     def make_manual_commands(self):
         path_dir = self.path_obj.parent
-        input_path = os.path.join(path_dir, 'input.csv')
+        input_path = os.path.join(str(path_dir), 'input.csv')
         if os.path.exists(input_path):
             self.logger.log('input.csv を確認しました。オリジナルコマンドを追加します。')
-            data = csv.DictReader(open(input_path, 'r', encoding='utf-8-sig'))
+            f_csv = open(input_path, 'r', encoding='utf-8-sig')
+            data = csv.DictReader(f_csv)
+            f_csv.close()
             manual_process(self, data)
         else:
             self.logger.log('input.csv が見つからないため、オリジナルコマンドは追加されません。\n')
 
     def make_raw_b(self):
         dummyend_grid = 100
-        f = open(self.path_obj, 'r')
+        f = open(self.path_obj, 'r', encoding='utf-8')
         j = json.load(f)
+        f.close()
         notes = None
         
         if '_notes' in j:
@@ -259,6 +255,7 @@ class ScriptMapper:
             try:
                 f_info = open(info_path, 'r', encoding='utf-8')
                 j_info = json.load(f_info)
+                f_info.close()
                 if 'difficultyBeatmaps' in j_info:
                     for beatmap in j_info['difficultyBeatmaps']:
                         if beatmap.get('beatmapDataFilename') == current_filename:
@@ -268,21 +265,20 @@ class ScriptMapper:
                                 v4_name_segment = f"{characteristic}{difficulty}"
                                 self.logger.log(f'info.dat から V4 ブックマーク名セグメントを生成: {v4_name_segment}')
                                 break
-                f_info.close()
             except Exception as e:
                 self.logger.log(f'info.dat の読み込み中にエラーが発生しました: {e}')
             
             if v4_name_segment:
                 v4_bookmark_path = path_dir / 'Bookmarks' / f'ChroMapper.{v4_name_segment}.bookmarks.dat'
                 
-                if os.path.exists(v4_bookmark_path):
+                if os.path.exists(str(v4_bookmark_path)):
                     self.logger.log(f'バージョン検出：V4 (ChroMapper) ブックマーク\n')
                     self.logger.log(f'V4ブックマークファイルを読み込みます: {v4_bookmark_path}')
                     try:
                         f_v4 = open(v4_bookmark_path, 'r', encoding='utf-8')
                         j_v4 = json.load(f_v4)
-                        bookmarks = j_v4['bookmarks']
                         f_v4.close()
+                        bookmarks = j_v4['bookmarks']
                     except Exception as e:
                         self.logger.log(f'V4ブックマークファイルの読み込みに失敗しました: {e}')
                         self.logger.log('プログラムを終了します。')
@@ -550,7 +546,7 @@ class ScriptMapper:
                 self.lines.append(org)
 
     def render_json(self):
-        template = {}
+        template = OrderedDict()
         template['ActiveInPauseMenu'] = True
         template['TurnToHeadUseCameraSetting'] = False
         template['Movements'] = []
@@ -573,27 +569,39 @@ class ScriptMapper:
             duration_error = 0
             if line.duration < 0.01:
                 line.duration = 0.01
-            movement = {}
-            movement['StartPos'] = {'x': line.start.pos.x,
-                                    'y': line.start.pos.y,
-                                    'z': line.start.pos.z,
-                                    'FOV': line.start.fov}
-            movement['StartRot'] = {'x': line.start.rot.x,
-                                    'y': line.start.rot.y,
-                                    'z': line.start.rot.z}
-            movement['StartHeadOffset'] = {'x': line.startHeadOffset.x,
-                                           'y': line.startHeadOffset.y,
-                                           'z': line.startHeadOffset.z}
-            movement['EndPos'] = {'x': line.end.pos.x,
-                                  'y': line.end.pos.y,
-                                  'z': line.end.pos.z,
-                                  'FOV': line.end.fov}
-            movement['EndRot'] = {'x': line.end.rot.x,
-                                  'y': line.end.rot.y,
-                                  'z': line.end.rot.z}
-            movement['EndHeadOffset'] = {'x': line.endHeadOffset.x,
-                                         'y': line.endHeadOffset.y,
-                                         'z': line.endHeadOffset.z}
+            movement = OrderedDict()
+            movement['StartPos'] = OrderedDict([
+                ('x', line.start.pos.x),
+                ('y', line.start.pos.y),
+                ('z', line.start.pos.z),
+                ('FOV', line.start.fov)
+            ])
+            movement['StartRot'] = OrderedDict([
+                ('x', line.start.rot.x),
+                ('y', line.start.rot.y),
+                ('z', line.start.rot.z)
+            ])
+            movement['StartHeadOffset'] = OrderedDict([
+                ('x', line.startHeadOffset.x),
+                ('y', line.startHeadOffset.y),
+                ('z', line.startHeadOffset.z)
+            ])
+            movement['EndPos'] = OrderedDict([
+                ('x', line.end.pos.x),
+                ('y', line.end.pos.y),
+                ('z', line.end.pos.z),
+                ('FOV', line.end.fov)
+            ])
+            movement['EndRot'] = OrderedDict([
+                ('x', line.end.rot.x),
+                ('y', line.end.rot.y),
+                ('z', line.end.rot.z)
+            ])
+            movement['EndHeadOffset'] = OrderedDict([
+                ('x', line.endHeadOffset.x),
+                ('y', line.endHeadOffset.y),
+                ('z', line.endHeadOffset.z)
+            ])
             movement['TurnToHead'] = line.turnToHead
             movement['TurnToHeadHorizontal'] = line.turnToHeadHorizontal
 
@@ -604,7 +612,7 @@ class ScriptMapper:
 
             movement['Delay'] = 0
             movement['EaseTransition'] = False
-            movement['VisibleObject'] = {}
+            movement['VisibleObject'] = OrderedDict()
             for key, value in line.visibleDict.items():
                 movement['VisibleObject'][key] = value
             template['Movements'].append(movement)
@@ -616,21 +624,25 @@ class ScriptMapper:
     def create_file(self):
         custom_map = self.path_obj.parent.name
         not_wip_folder = os.path.join(
-            self.path_obj.parents[2], 'CustomLevels', custom_map)
+            str(self.path_obj.parents[2]), 'CustomLevels', custom_map)
         if os.path.exists(not_wip_folder):
             self.logger.log('カスタムマップに同名のフォルダを確認。こちらにもSongScript.jsonを作成します。\n')
             not_wip_target = os.path.join(not_wip_folder, 'SongScript.json')
-            json.dump(self.output, open(not_wip_target, 'w'), indent=4)
+            f_custom_json = open(not_wip_target, 'w', encoding='utf-8')
+            json.dump(self.output, f_custom_json, indent=4, ensure_ascii=False)
+            f_custom_json.close()
             self.logger.log(not_wip_target)
         path_dir = self.path_obj.parent
-        target_path = os.path.join(path_dir, 'SongScript.json')
+        target_path = os.path.join(str(path_dir), 'SongScript.json')
         self.logger.log(target_path)
-        json.dump(self.output, open(target_path, 'w'), indent=4)
+        f_wip_json = open(target_path, 'w', encoding='utf-8')
+        json.dump(self.output, f_wip_json, indent=4, ensure_ascii=False)
+        f_wip_json.close()
         self.logger.log('\nファイルの書き出しを正常に完了しました。')
         # create log history
-        log_path = os.path.join(path_dir, 'log_latest.txt')
+        log_path = os.path.join(str(path_dir), 'log_latest.txt')
         now = str(datetime.datetime.now()).replace(':', '_')[:19]
-        log_folder_path = os.path.join(path_dir, 'logs')
+        log_folder_path = os.path.join(str(path_dir), 'logs')
         if not os.path.exists(log_folder_path):
             os.mkdir(log_folder_path)
         copy_path = os.path.join(log_folder_path, f'log_{now}.txt')

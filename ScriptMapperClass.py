@@ -52,6 +52,10 @@ class ScriptMapper:
         # output
         self.output = None
 
+    def error_exit(self):
+        input()
+        exit()
+
     def set_file_path(self, file_path):
         self.file_path = file_path
         self.path_obj = pathlib.Path(file_path)
@@ -63,8 +67,7 @@ class ScriptMapper:
         isWIP = self.path_obj.parent.parent
         if isWIP.name != 'CustomWIPLevels':
             self.logger.log('WIPフォルダの下にありません。プログラムを終了します。')
-            input()
-            exit()
+            self.error_exit()
         self.logger.log('WIPフォルダの下にあることを確認\n')
 
     def check_bpm(self):
@@ -72,8 +75,7 @@ class ScriptMapper:
         info_path = os.path.join(str(path_dir), 'info.dat')
         if not os.path.exists(info_path):
             self.logger.log('info.dat が見つかりません。プログラムを終了します。')
-            input()
-            exit()
+            self.error_exit()
         
         f_info = open(info_path, 'r', encoding='utf-8')
         j_info = json.load(f_info)
@@ -88,8 +90,7 @@ class ScriptMapper:
             self.logger.log('V4形式のデフォルトBPMを検出')
         else:
             self.logger.log('info.dat にBPM情報が見つかりません。プログラムを終了します。')
-            input()
-            exit()
+            self.error_exit()
 
         self.bpm = bpm
         self.logger.log(f'デフォルトbpmを計測 {self.bpm} \n')
@@ -193,8 +194,7 @@ class ScriptMapper:
 
             except Exception as e:
                 self.logger.log(f'AudioData.dat の読み込みまたは処理に失敗しました: {e}')
-                input()
-                exit()
+                self.error_exit()
         else:
             self.logger.log('BPM変更は見つかりませんでした。\n')
 
@@ -205,8 +205,8 @@ class ScriptMapper:
             self.logger.log('input.csv を確認しました。オリジナルコマンドを追加します。')
             f_csv = open(input_path, 'r', encoding='utf-8-sig')
             data = csv.DictReader(f_csv)
-            f_csv.close()
             manual_process(self, data)
+            f_csv.close()
         else:
             self.logger.log('input.csv が見つからないため、オリジナルコマンドは追加されません。\n')
 
@@ -281,8 +281,7 @@ class ScriptMapper:
                     except Exception as e:
                         self.logger.log(f'V4ブックマークファイルの読み込みに失敗しました: {e}')
                         self.logger.log('プログラムを終了します。')
-                        input()
-                        exit()
+                        self.error_exit()
                 else:
                     self.logger.log(f'V4ブックマークファイルが見つかりませんでした: {v4_bookmark_path}')
             else:
@@ -292,7 +291,7 @@ class ScriptMapper:
 
         if len(bookmarks) == 0:
             self.logger.log('この譜面にはブックマークが含まれていません。プログラムを終了します。')
-            exit()
+            self.error_exit()
         else:
             if '_time' in bookmarks[-1]:
                 dummyend_grid = max(

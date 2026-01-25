@@ -5,3 +5,4 @@ build
 *.spec
 ExampleMovementScript.json
 test.png
+/Codesigning

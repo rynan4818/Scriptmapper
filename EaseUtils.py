@@ -367,6 +367,8 @@ def parse_easing_func(text : str, logger, log_prefix=''):
     if not text:
         return None, 6, 6, None
     u_text = text.upper().strip()
+    if u_text.startswith('EASE'):
+        u_text = u_text[4:]
     dx = 6
     dy = 6
     easetype_name = None

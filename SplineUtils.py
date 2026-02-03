@@ -217,7 +217,9 @@ def spline(self, text, dur, next_text=None, next_dur=None):
     self.logger.log(f'spline コマンド解析開始: "{text}"')
     current_data = _spline_parse_points(text, self.logger)
     if current_data is None:
-        return
+        self.logger.log('! spline コマンドの解析に失敗したため、プログラムを終了します !')
+        input()
+        exit()
     control_points_pos = current_data['pos']
     control_points_fov = current_data['fov']
     control_points_roll_raw = current_data['roll']

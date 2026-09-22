@@ -46,11 +46,12 @@ def rvib(self, dur, text, line):
     dx = 6
     dy = 6
     easetype_name = None
-    if params_list:
+    # The first argument is always the preset, never an easing name.
+    if len(params_list) > 1:
         last_param_str = params_list[-1]
         u_text = last_param_str.upper()
         found_ease_obj = False
-        if any([c.isalpha() for c in u_text]):
+        if _has_parameter_name(u_text):
             ease_func, dx, dy, easetype_name = parse_easing_func(u_text, self.logger, log_prefix='rvib ')
             if ease_func:
                 found_ease_obj = True

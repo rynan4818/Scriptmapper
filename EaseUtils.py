@@ -281,10 +281,8 @@ def calculate_adaptive_multiplier(easefunc, dur, dx, dy, logger):
 
 
 def interpolate(start, end, rate):
-    if rate >= 1.0:
-        return end
-    if rate <= 0.0:
-        return start
+    # Back/Elastic deliberately return rates outside [0, 1]. Clamp their input
+    # time instead; clamping the result removes the original camera motion.
     return start*(1-rate) + end*rate
 
 
@@ -309,13 +307,18 @@ def ease(self, dur, text : str, line):
         self.logger.log(line.start)
         self.logger.log(line.end)
         return
+    output_duration = dur
+    dur = getattr(line, 'legacy_sampling_duration', dur)
+    if dur <= 0 and output_duration > 0:
+        dur = output_duration
+    duration_scale = output_duration / dur if dur > 0 else 1.0
     span = max(1/30, dur/36)
     spans = []
     init_dur = dur
     while dur > 0:
         min_span = min(span, dur)
-        if dur - min_span < 0.01:
-            min_span = dur
+        # Keep upstream sample points. Sub-10 ms output durations are handled
+        # by render_json without changing the generated curve or random state.
         spans.append(min_span)
         dur -= min_span
     span_size = len(spans)
@@ -331,20 +334,15 @@ def ease(self, dur, text : str, line):
 
     self.lastTransform = line.start
     for i in range(span_size):
-        new_line = Line(spans[i])
+        new_line = Line(spans[i] * duration_scale)
         new_line.visibleDict = deepcopy(line.visibleDict)
-        if i == span_size - 1:
-            t = 1.0
-        else:
-            t = min(1, sum(spans[:(i+1)])/init_dur)
+        # Preserve the original sampling time, including its floating-point
+        # order, while protecting Circ and other bounded-domain functions.
+        t = max(0.0, min(1.0, sum(spans[:(i+1)])/init_dur))
         if easefunc != Drift:
             rate = easefunc(t)
         else:
             rate = Drift(t,dx,dy)
-        
-        if t >= 1.0:
-            rate = 1.0
-            
         new_line.start = deepcopy(self.lastTransform)
         endPos = Pos(
             interpolate(ixp, lxp, rate),

@@ -8,6 +8,16 @@ from copy import deepcopy
 from BasicElements import Pos, Rot, Line, Transform
 from shake_data import SHAKE_LIST
 from EaseUtils import parse_easing_func, calculate_adaptive_multiplier
+from LegacyLongCommandsUtils import vib as legacy_vib
+
+
+def _has_parameter_name(text):
+    # An exponent is part of a number, not the start of an easing name.
+    # Classification only: do not evaluate expressions while finding options.
+    without_exponents = re.sub(
+        r'(?<![\w.])(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+(?![\w.])', '', text)
+    return any(c.isalpha() for c in without_exponents)
+
 
 def get_shake_value(shake_data, frame):
     if not shake_data:
@@ -143,14 +153,14 @@ def rotate(self, text, dur):
     found_ease_name = False
     for param in params_list:
         param_stripped = param.strip()
-        if not found_ease_name and any([c.isalpha() for c in param_stripped]):
+        if not found_ease_name and _has_parameter_name(param_stripped):
             found_ease_name = True
         if found_ease_name:
             special_params_list.append(param_stripped)
         else:
             numeric_params_list.append(param)
     numeric_text = ','.join(numeric_params_list)
-    if any([c.isalpha() for c in numeric_text]): 
+    if _has_parameter_name(numeric_text):
         self.logger.log(
             f'数値パラメータ {numeric_text} に英字を確認。セキュリティの問題上、プログラムを強制終了します。')
         input()
@@ -275,7 +285,7 @@ def rot(self, dur, text, line):
     found_ease_name = False
     for param in params_list:
         param_stripped = param.strip()
-        if not found_ease_name and any([c.isalpha() for c in param_stripped]):
+        if not found_ease_name and _has_parameter_name(param_stripped):
             found_ease_name = True
         if found_ease_name:
             special_params_list.append(param_stripped)
@@ -286,7 +296,8 @@ def rot(self, dur, text, line):
     dy = 6
     easetype_name = None
     if found_ease_name:
-        ease_name_str = special_params_list[0]
+        # Keep Drift's underscore parameters after consuming the numeric prefix.
+        ease_name_str = '_'.join(special_params_list)
         ease_func, dx, dy, easetype_name = parse_easing_func(ease_name_str, self.logger, log_prefix='rot ')
     is_linear = ease_func is None
     if is_linear:
@@ -364,7 +375,11 @@ def rot(self, dur, text, line):
     if init_dur == 0:
         self.lines.append(line)
         return
-    self.lastTransform = line.start 
+    # Use the same orbit transform at rate zero as at every later sample.
+    # A q command's yaw must not cause a correction turn in the first segment.
+    self.lastTransform = Transform(
+        Pos(round(ir*cos(itheta), 3), iyp, round(ir*sin(itheta)+o, 3)),
+        Rot(ixr, -degrees(itheta)+270, izr), iFOV)
     for i in range(span_size):
         new_line = Line(spans[i])
         # new_line.visibleDict = deepcopy(self.visibleObject.state)
@@ -433,6 +448,8 @@ def vib(self, dur, text, line):
         ease_name_str = special_params_list[0].strip()
         if ease_name_str:
             ease_func, dx, dy, easetype_name = parse_easing_func(ease_name_str, self.logger, log_prefix='vib ')
+    if not any(param.strip() for param in special_params_list):
+        return legacy_vib(self, dur, 'vib' + numeric_param_str, line)
     is_linear = ease_func is None
     if is_linear:
         ease_func = lambda t: t

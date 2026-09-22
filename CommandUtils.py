@@ -1,6 +1,6 @@
 from BasicElements import Pos, Rot
 from LongCommandsUtils import rotate, vibro, script
-from SplineUtils import spline
+from SplineUtils import spline, is_spline_command
 from PresetCommandsUtils import generate
 from GeneralUtils import get_param
 import math
@@ -113,7 +113,10 @@ def long_command(self, text, dur, next_text=None, next_dur=None) -> bool:
         rotate(self, text[6:], dur) 
         return True
     # spline / bspline
-    if text[:6] == 'spline' or text[:7] == 'bspline':
+    # A pre-existing CSV pose can start with a newly introduced command name.
+    # Resolve its complete start token through parse_command before treating
+    # the bookmark as a spline (also covers "splineCam,otherPose,InSine").
+    if is_spline_command(text, self.manual):
         self.logger.log(text)
         self.logger.log('spline/bspline コマンドを確認')
         spline(self, text, dur, next_text, next_dur) 

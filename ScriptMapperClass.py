@@ -6,7 +6,18 @@ import pathlib
 import shutil
 import datetime
 from random import seed
-from math import ceil
+from math import ceil, isclose
+try:
+    from math import ulp
+except ImportError:  # math.ulp was introduced in Python 3.9.
+    from math import frexp, isfinite, ldexp
+
+    def ulp(value):
+        value = abs(value)
+        if not isfinite(value):
+            return value
+        exponent = frexp(value)[1] - 53 if value else -1074
+        return ldexp(1.0, max(-1074, exponent))
 
 from BasicElements import Bookmark, Line, Transform, Logger, VisibleObject, Pos, Rot
 from GeneralUtils import format_time, manual_process
@@ -384,6 +395,18 @@ class ScriptMapper:
             if not v1_format:
                 end_time = virtual_time + (end - bpmchange_grid) * 60 / current_bpm
                 command_b[i].duration = end_time - start_time
+            # Equivalent duration formulas can differ by a few ULPs. Preserve
+            # the original formula for sampling so a tiny residual cannot add
+            # or remove a vibration sample and shift every subsequent RNG draw.
+            # Genuine BPM-change durations must continue to use the new timing.
+            legacy_duration = (end - start) * 60 / self.bpm
+            actual_duration = command_b[i].duration
+            tolerance = 8 * max(ulp(start_time), ulp(end_time),
+                                ulp(legacy_duration), ulp(actual_duration))
+            command_b[i].legacy_sampling_duration = (
+                legacy_duration if isclose(legacy_duration, actual_duration,
+                                           rel_tol=0, abs_tol=tolerance)
+                else actual_duration)
 
     def show_bookmarks(self) -> None:
         self.logger.log('\nfill,copyの処理を完了しました。最終的なブックマークは以下になります。')
@@ -451,8 +474,11 @@ class ScriptMapper:
                 parse.append('False')
             # new_line = Line(dur, self.visibleObject.state)
             new_line = Line(dur)
+            new_line.legacy_sampling_duration = getattr(b, 'legacy_sampling_duration', dur)
             if self.offset > 0:
                 new_line.duration = max(0, new_line.duration - self.offset)
+                new_line.legacy_sampling_duration = max(
+                    0, new_line.legacy_sampling_duration - self.offset)
                 self.logger.log(
                     f'offset コマンドにより、この箇所は {new_line.duration} 秒に短縮されます。')
                 self.offset = 0
@@ -496,7 +522,16 @@ class ScriptMapper:
                     new_line.ease = transition_command
                     self.logger.log(
                         f'（工事中）easeTransition に文字列を確認しましたが、イージングの処理は、next の後に行う必要があるため、後で再計算します。')
-            self.lines.append(new_line)
+            if new_line.rot and not new_line.isNext:
+                # Resolve a known rot endpoint before parsing stop/relative commands.
+                # The rendered orbit can have a different yaw and Z offset from q.
+                rot_text = new_line.rot
+                new_line.rot = ''
+                rot(self, new_line.duration, rot_text, new_line)
+                # stop/$ adjustments must not mutate the already generated orbit.
+                self.lastTransform = deepcopy(self.lastTransform)
+            else:
+                self.lines.append(new_line)
             self.logger.log(f'start {new_line.start}')
             self.logger.log(f'end {new_line.end}')
 
@@ -508,6 +543,32 @@ class ScriptMapper:
             if line.isNext:
                 next_line = lines[i+1]
                 line.end = next_line.start
+
+        # A rot ending in next needs the following parsed start first. Keep the
+        # existing reference used to parse that start (relative next is circular
+        # if interpreted against its own not-yet-known endpoint).
+        if not any(line.rot for line in lines):
+            return
+        saved_transform = self.lastTransform
+        self.lines = []
+        starts = []
+        ordinary_next = []
+        for line in lines:
+            starts.append(len(self.lines))
+            was_rot = bool(line.rot)
+            ordinary_next.append(line.isNext and not was_rot)
+            if was_rot:
+                rot_text = line.rot
+                line.rot = ''
+                rot(self, line.duration, rot_text, line)
+            else:
+                self.lines.append(line)
+        # An ordinary next before a deferred rot must also see its corrected
+        # initial pose, before ease_calc subdivides the preceding movement.
+        for i in range(size - 1):
+            if ordinary_next[i]:
+                lines[i].end = deepcopy(self.lines[starts[i + 1]].start)
+        self.lastTransform = saved_transform
 
     def ease_calc(self):
         self.logger.log('\nイージングの処理が臨時的にここにログに出されます。後で直します。')

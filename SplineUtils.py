@@ -209,7 +209,13 @@ def _spline_parse_points(text, logger):
     }
 
 
-def spline(self, text, dur, next_text=None, next_dur=None): 
+def is_spline_command(text, manual):
+    # CSV labels take precedence both during dispatch and during sync look-ahead.
+    return bool(text and text.startswith(('spline', 'bspline'))
+                and text.split(',', 1)[0] not in manual)
+
+
+def spline(self, text, dur, next_text=None, next_dur=None):
     """
     Catmull-Rom / B-Spline 補間を行う。
     q_... 形式の座標 (8要素: px,py,pz,rx,ry,rz,fov) を補間する。
@@ -258,7 +264,7 @@ def spline(self, text, dur, next_text=None, next_dur=None):
     next_guide_roll = None
     next_total_distance = 0.0
     next_sync_target_vel = None
-    if next_text and 'spline' in next_text:
+    if is_spline_command(next_text, self.manual):
         next_data = _spline_parse_points(next_text, None) 
         if next_data and next_data['pos']:
             if next_data['cnct']:
